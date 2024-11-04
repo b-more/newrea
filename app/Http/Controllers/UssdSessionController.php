@@ -217,6 +217,7 @@ class UssdSessionController extends Controller
                             } else {
                                 $message_string = "Unauthorized access. Contact support.";
                                 $request_type = "3";
+                                $this->sendNotification($phone, $message_string);
                             }
                             break;
                         default:
@@ -256,14 +257,10 @@ class UssdSessionController extends Controller
                                                 "Status: " . ucfirst($result['status']);
 
                                 // Send SMS
-                                $this->sendSms(
-                                    $phone,
-                                    "Your electricity purchase of " . $result['currency'] . " " .
-                                    $result['amount'] . " was successful.\n" .
-                                    "Reference: " . $result['external_id']
-                                );
+                                $this->sendNotification($phone, $message_string);
                             } else {
                                 $message_string = $result['message'];
+                                $this->sendNotification($phone, $message_string);
                             }
                             $request_type = "3";
                         } else {
@@ -290,11 +287,7 @@ class UssdSessionController extends Controller
                                                         $balanceCheck['balance'];
 
                                         // Send balance via SMS
-                                        $this->sendSms($phone,
-                                            "Your electricity balance is " .
-                                            $balanceCheck['currency'] . " " .
-                                            $balanceCheck['balance']
-                                        );
+                                        $this->sendNotification($phone, $message_string);
                                     } else {
                                         $message_string = "Failed to check balance. Please try again later.";
                                     }
@@ -322,6 +315,8 @@ class UssdSessionController extends Controller
                                                     "Date: " . $payment->created_at->format('Y-m-d H:i:s') . "\n" .
                                                     "Status: Success\n" .
                                                     "Meter: " . $payment->meter_number;
+                                                    $this->sendNotification($phone, $message_string);
+
                                 } else {
                                     $message_string = "Transaction not found";
                                 }
@@ -343,6 +338,7 @@ class UssdSessionController extends Controller
                     } else {
                         $message_string = "Invalid PIN. Try again:";
                         $this->logAgentActivity(null, 'login', 'failed');
+                        $this->sendNotification($phone, $message_string);
                     }
                 } elseif ($step_no == 2 && is_numeric($last_part)) {
                     switch ($last_part) {
@@ -385,6 +381,7 @@ class UssdSessionController extends Controller
                                 if ($agent->float_balance <= 0) {
                                     $message_string = "Insufficient float balance. Please top up first.";
                                     $request_type = "3";
+                                    $this->sendNotification($phone, $message_string);
                                     break;
                                 }
 
@@ -428,6 +425,7 @@ class UssdSessionController extends Controller
                                 $message_string = "Amount exceeds float balance (K" .
                                                 number_format($agent->float_balance, 2) .
                                                 "). Try again:";
+                                $this->sendNotification($phone, $message_string);
                                 break;
                             }
 
@@ -473,10 +471,11 @@ class UssdSessionController extends Controller
                                     if ($customer) {
                                         $this->sendSms(
                                             $customer->phone_number,
-                                            "Your electricity token: " . $result['token'] .
+                                           $message_string = "Your electricity token: " . $result['token'] .
                                             "\nAmount: K" . number_format($session->amount, 2) .
                                             "\nRef: " . $result['external_id']
                                         );
+                                        $this->sendNotification($phone, $message_string);
                                     }
                                 } else {
                                     $message_string = "Payment failed: " . ($result['message'] ?? 'Unknown error');
@@ -528,12 +527,15 @@ class UssdSessionController extends Controller
                         if ($result['success']) {
                             $message_string = "Payment successful\nToken: " . $result['token'];
                             $this->sendSms($phone, "Payment successful. Token: " . $result['token']);
+                            $this->sendNotification($phone, $message_string);
                         } else {
                             $message_string = "Payment failed: " . $result['message'];
+                            $this->sendNotification($phone, $message_string);
                         }
                         $request_type = "3";
                     } else {
                         $message_string = "Transaction cancelled.";
+                        $this->sendNotification($phone, $message_string);
                         $request_type = "3";
                     }
                 }
@@ -1422,7 +1424,7 @@ class UssdSessionController extends Controller
     {
         $url_encoded_message = urlencode($message_string);
 
-        $url = 'https://www.cloudservicezm.com/smsservice/httpapi?username=Blessmore&password=Blessmore&msg=' . $url_encoded_message . '.+&shortcode=2343&sender_id=REA&phone=' . $phone . '&api_key=121231313213123123';
+        $url = 'https://www.cloudservicezm.com/smsservice/httpapi?username=Blessmore&password=Blessmore&msg=' . $url_encoded_message . '.+&shortcode=2343&sender_id=REAPAY&phone=' . $phone . '&api_key=121231313213123123';
 
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
