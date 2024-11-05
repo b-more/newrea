@@ -19,6 +19,9 @@ class PaymentMethodSeeder extends Seeder
             ],
             [
                 "name" => "Mobile Money"
+            ],
+            [
+                "name" => "Agent Float"
             ]
         ]);
     }

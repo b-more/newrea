@@ -23,6 +23,9 @@ class PaymentChannelSeeder extends Seeder
             ],
             [
                 "name" => "Zamtel Money"
+            ],
+            [
+                "name" => "Agent Float"
             ]
         ]);
     }

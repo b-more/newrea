@@ -229,45 +229,40 @@ class UssdSessionController extends Controller
                     if ($step_no == 1) {
                         $customer = $this->validateCustomer($last_part);
                         if ($customer) {
-                            // Default test amount
-                            $amount = 100;
+                            $message_string = "Customer: " . $customer->name .
+                                            "\nMeter: " . $customer->meter_number .
+                                            "\nEnter amount:";
 
-                            $result = $this->sparkMeter->processPayment(
-                                $customer->customer_number,
-                                $amount,
-                                "USSD Electricity Purchase"
-                            );
-
-                            if ($result['success']) {
-                                // Save payment record
-                                $payment = Payment::create([
-                                    'phone_number' => $phone,
-                                    'meter_number' => $customer->meter_number,
-                                    'customer_id' => $customer->id,
-                                    'amount_paid' => $result['amount'],
-                                    'payment_status_id' => 1,
-                                    'payment_reference_number' => $result['external_id'],
-                                    'transaction_id' => $result['transaction_id']
-                                ]);
-
-                                $message_string = "Payment Successful!\n" .
-                                                "Amount: " . $result['currency'] . " " . $result['amount'] . "\n" .
-                                                "Reference: " . $result['external_id'] . "\n" .
-                                                "Status: " . ucfirst($result['status']);
-
-                                // Send SMS
-                                $this->sendSms(
-                                    $phone,
-                                    "Your electricity purchase of " . $result['currency'] . " " .
-                                    $result['amount'] . " was successful.\n" .
-                                    "Reference: " . $result['external_id']
-                                );
-                            } else {
-                                $message_string = $result['message'];
-                            }
-                            $request_type = "3";
+                            $this->updateSession($session_id, 2, 2, [
+                                'customer_id' => $customer->id,
+                                'meter_number' => $customer->meter_number,
+                                'customer_number' => $customer->customer_number
+                            ]);
                         } else {
                             $message_string = "Invalid customer code. Try again:";
+                        }
+                    } elseif ($step_no == 2 && is_numeric($last_part)) {
+                        if ($last_part <= 0) {
+                            $message_string = "Invalid amount. Try again:";
+                        } else {
+                            $session = UssdSession::where('session_id', $session_id)->first();
+
+                            // Call the payment function which handles Zamtel integration
+                            $result = $this->payment(
+                                $phone,
+                                $last_part,
+                                $session->meter_number,
+                                $session->customer_id
+                            );
+
+                            if ($result) {
+                                $message_string = "Please enter your Zamtel Money PIN to complete the transaction of K" .
+                                                number_format($last_part, 2) .
+                                                " for electricity purchase.";
+                            } else {
+                                $message_string = "Payment initiation failed. Please try again later.";
+                            }
+                            $request_type = "3";
                         }
                     }
                     break;
@@ -927,7 +922,7 @@ class UssdSessionController extends Controller
             }
 
             // 4. Generate reference
-            $reference = 'FLT' . rand(100000, 999999);
+            $reference = 'FLT' . rand(1000000000, 9999999999);
 
             try {
                 // 5. Create float transaction
@@ -950,16 +945,25 @@ class UssdSessionController extends Controller
                 // 6. Create payment record
                 $payment = Payment::create([
                     'phone_number' => $customer->phone_number,
+                    'payment_method_id' => 3,        // Agent Float
+                    'payment_channel_id' => 3,       // zamtel
                     'meter_number' => $meter_number,
                     'customer_id' => $customer_id,
                     'agent_id' => $agent_id,
                     'amount_paid' => $amount,
-                    'payment_status_id' => 0,
-                    'payment_reference_number' => $reference
+                    'payment_status_id' => 1,
+                    'payment_reference_number' => $reference,
+                    'retry_count' => 1,
+                    'transaction_type_id' => 1,      // credit
+                ]);
+
+                Log::info('Payment record created', [
+                    'payment_id' => $payment->id,
+                    'reference' => $ref_number
                 ]);
 
                 // 7. Mock successful payment (for testing)
-                $token = 'TOK' . rand(1000000, 9999999);
+                $token = 'TOK' . rand(10000000000, 99999999999);
                 $units = round($amount / 7.08, 2);
 
                 // 8. Update agent float balance
@@ -1101,241 +1105,294 @@ class UssdSessionController extends Controller
         return $agent ? $agent->float_balance : 0;
     }
 
+    // function payment($phone, $amount, $meter_no, $customer_id)
+    // {
+    //     if (str_starts_with($phone, '75') || str_starts_with($phone, '95') || str_starts_with($phone, '095') || str_starts_with($phone, '26095') || str_starts_with($phone, '075') || str_starts_with($phone, '26075')) {
+
+    //         //generate the random reference number
+    //         $payment_ref = $this->generateConversationId();
+
+    //         $phone_number = $phone;
+
+    //         if (str_starts_with($phone, '075')) {
+    //             $phone_number = ltrim($phone_number, '0');
+    //         }
+    //         if (str_starts_with($phone, '26075')) {
+    //             $phone_number = ltrim($phone_number, '260');
+    //         }
+    //         if (str_starts_with($phone, '26095')) {
+    //             $phone_number = ltrim($phone_number, '260');
+    //         }
+    //         if (str_starts_with($phone, '095')) {
+    //             $phone_number = ltrim($phone_number, '0');
+    //         }
+
+    //         //save payment intent into the database
+    //         $initialised_transaction = Payment::create([
+    //             'payment_method_id' => 2, // 1.Cash 2. mobile money
+    //             'payment_channel_id' => 3, //1. Airtel 2. MTN 3. Zamtel
+    //             'payment_reference_number' => $payment_ref,
+    //             'payment_route_id' => 2,
+    //             'phone_number' => $phone,
+    //             'meter_number' => $meter_no,
+    //             'amount_paid' => $amount,
+    //             'payment_status_id' => 2, //1. success 2. pending 3. failed
+    //             'transaction_type_id' => 1, //1.credit and 2. Debit
+    //             'customer_id' => $customer_id
+    //         ]);
+
+    //         $initialised_transaction->save();
+
+    //         //Zamtel Money
+    //         //send payment to zamtel money
+
+    //         return $this->zamtel_soap("260" . $phone_number, $amount, $initialised_transaction->id, $payment_ref);
+    //     }
+    // }
+
     function payment($phone, $amount, $meter_no, $customer_id)
     {
-        if (str_starts_with($phone, '75') || str_starts_with($phone, '95') || str_starts_with($phone, '095') || str_starts_with($phone, '26095') || str_starts_with($phone, '075') || str_starts_with($phone, '26075')) {
-
-            //generate the random reference number
-            $payment_ref = $this->generateConversationId();
-
-            $phone_number = $phone;
-
-            if (str_starts_with($phone, '075')) {
-                $phone_number = ltrim($phone_number, '0');
-            }
-            if (str_starts_with($phone, '26075')) {
-                $phone_number = ltrim($phone_number, '260');
-            }
-            if (str_starts_with($phone, '26095')) {
-                $phone_number = ltrim($phone_number, '260');
-            }
-            if (str_starts_with($phone, '095')) {
-                $phone_number = ltrim($phone_number, '0');
-            }
-
-            //save payment intent into the database
-            $initialised_transaction = Payment::create([
-                'payment_method_id' => 2, // 1.Cash 2. mobile money
-                'payment_channel_id' => 3, //1. Airtel 2. MTN 3. Zamtel
-                'payment_reference_number' => $payment_ref,
-                'payment_route_id' => 2,
-                'phone_number' => $phone,
-                'meter_number' => $meter_no,
-                'amount_paid' => $amount,
-                'payment_status_id' => 2, //1. success 2. pending 3. failed
-                'transaction_type_id' => 1, //1.credit and 2. Debit
+        try {
+            Log::info('Starting payment process', [
+                'phone' => $phone,
+                'amount' => $amount,
+                'meter_no' => $meter_no,
                 'customer_id' => $customer_id
             ]);
 
-            $initialised_transaction->save();
+            // Check if it's a Zamtel number
+            if (str_starts_with($phone, '75') ||
+                str_starts_with($phone, '95') ||
+                str_starts_with($phone, '095') ||
+                str_starts_with($phone, '26095') ||
+                str_starts_with($phone, '075') ||
+                str_starts_with($phone, '26075')) {
 
-            //Zamtel Money
-            //send payment to zamtel money
+                // Generate reference number
+                $payment_ref = $this->generateConversationId();
 
-            return $this->zamtel_soap("260" . $phone_number, $amount, $initialised_transaction->id, $payment_ref);
+                // Format phone number for Zamtel
+                $phone_number = $phone;
+                if (str_starts_with($phone, '075')) {
+                    $phone_number = ltrim($phone_number, '0');
+                }
+                if (str_starts_with($phone, '26075')) {
+                    $phone_number = ltrim($phone_number, '260');
+                }
+                if (str_starts_with($phone, '26095')) {
+                    $phone_number = ltrim($phone_number, '260');
+                }
+                if (str_starts_with($phone, '095')) {
+                    $phone_number = ltrim($phone_number, '0');
+                }
+
+                // Create initial payment record
+                $initialised_transaction = Payment::create([
+                    'payment_method_id' => 2, // mobile money
+                    'payment_channel_id' => 3, // Zamtel
+                    'payment_reference_number' => $payment_ref,
+                    'payment_route_id' => 2,
+                    'phone_number' => $phone,
+                    'meter_number' => $meter_no,
+                    'amount_paid' => $amount,
+                    'payment_status_id' => 2, // pending
+                    'transaction_type_id' => 1, // credit
+                    'customer_id' => $customer_id,
+                    'retry_count' => 1
+                ]);
+
+                // Call Zamtel SOAP
+                return $this->zamtel_soap(
+                    "260" . $phone_number,
+                    $amount,
+                    $initialised_transaction->id,
+                    $payment_ref
+                );
+            }
+
+            return false;
+        } catch (\Exception $e) {
+            Log::error('Payment initiation error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return false;
         }
     }
 
     function zamtel_soap($phone, $amount, $transaction_id, $transaction_ref)
     {
+        try {
+            $current_date = Carbon::now();
+            $timestamp = $current_date->format('YmdHis');
 
-        $current_date = Carbon::now();
-        $timestamp = $current_date->format('YmdHis');
-        $password = "YEGxyU69L8lHXjHUJe1SNk3MwOMTxQG9";
-        $CllT_Caller = "CllT_Caller";
-        $identifier = "111135";
-        $test_url = "http://172.18.2.135:7661/payment/services/SYNCAPIRequestMgrService";
-        $prod_url = "http://172.18.0.133:7661/payment/services/SYNCAPIRequestMgrService/";
-
-        Log::info("Zamtel Web Started - PHONE NUMBER: " . $phone . "; AMOUNT: " . $amount.", TIMESTAMP ".$timestamp);
-
-        $newXmlPayload = '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-        xmlns:api="http://cps.huawei.com/synccpsinterface/api_requestmgr"
-        xmlns:req="http://cps.huawei.com/synccpsinterface/request"
-        xmlns:com="http://cps.huawei.com/synccpsinterface/common"
-        xmlns:cus="http://cps.huawei.com/cpsinterface/customizedrequest">
-            <soapenv:Body>
-                <api:Request>
-                    <!-- Request Header -->
-                    <req:Header>
-                        <req:Version>1.0</req:Version>
-                        <req:CommandID>InitTrans_Customer Pay Organization Bill</req:CommandID>
-                        <req:OriginatorConversationID>429106433679961234</req:OriginatorConversationID>
-                        <req:Caller>
-                            <req:CallerType>2</req:CallerType>
-                            <req:ThirdPartyID>REA_Caller</req:ThirdPartyID>
-                            <req:Password>YEGxyU69L8lHXjHUJe1SNk3MwOMTxQG9</req:Password>
-                        </req:Caller>
-                        <req:KeyOwner>1</req:KeyOwner>
-                        <req:Timestamp>20190611103527</req:Timestamp>
-                    </req:Header>
-                    <!-- Request Body -->
-                    <req:Body>
-                        <req:Identity>
-                            <req:Initiator>
-                                <req:IdentifierType>1</req:IdentifierType>
-                                <req:Identifier>'.$phone.'</req:Identifier>
-                            </req:Initiator>
-                            <req:ReceiverParty>
-                                <req:IdentifierType>4</req:IdentifierType>
-                                <req:Identifier>111135</req:Identifier>
-                            </req:ReceiverParty>
-                        </req:Identity>
-                        <req:TransactionRequest>
-                            <req:Parameters>
-                                <req:Parameter>
-                                    <com:Key>BillReferenceNumber</com:Key>
-                                    <com:Value>'.$transaction_ref.'</com:Value>
-                                </req:Parameter>
-                                <req:Amount>'.$amount.'</req:Amount>
-                                <req:Currency>ZMW</req:Currency>
-                            </req:Parameters>
-                        </req:TransactionRequest>
-                    </req:Body>
-                </api:Request>
-            </soapenv:Body>
-        </soapenv:Envelope>';
-
-        $curl = curl_init();
-
-        curl_setopt_array($curl, array(
-            CURLOPT_URL => $prod_url,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING => '',
-            CURLOPT_MAXREDIRS => 10,
-            CURLOPT_TIMEOUT => 0,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-            CURLOPT_CUSTOMREQUEST => 'POST',
-            CURLOPT_POSTFIELDS => $newXmlPayload,
-            CURLOPT_HTTPHEADER => array(
-                'Accept: application/soap+xml,application/dime,multipart/related,text/*',
-                'Content-Type: text/xml',
-                'SOAPAction: ""'
-            ),
-        ));
-
-        $response = curl_exec($curl);
-
-        curl_close($curl);
-
-        Log::info("PHONE NUMBER " . $phone . " Zamtel Curl", ["Result" => $response]);
-
-        $xml = simplexml_load_string($response, 'SimpleXMLElement', LIBXML_NOCDATA);
-
-        // Register SOAP namespace prefix
-        $xml->registerXPathNamespace('res', 'http://cps.huawei.com/synccpsinterface/result');
-
-        // Use the registered namespace prefix in XPath query
-        $resultCode = (string)$xml->xpath('//res:ResultCode')[0];
-        $resultDesc = (string)$xml->xpath('//res:ResultDesc')[0];
-
-        Log::info("PHONE NUMBER " . $phone . " Zamtel SOAP", ["Result Code" => $resultCode]);
-
-        // Check if the response has the expected structure
-
-        if ($resultCode == 0 && $resultCode == "0") {
-
-            $payment = Payment::where('id', $transaction_id)->first();
-
-            $this->createTransactionSparkApi($payment->id, $payment->customer_id, $payment->amount_paid, $transaction_ref, $payment->phone_number);
-
-            Log::info("Zamtel SOAP Success Code ".$resultCode);
-            Log::info("Zamtel SOAP Success Description".$resultDesc);
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 1 //success
+            Log::info("Zamtel SOAP Request", [
+                'phone' => $phone,
+                'amount' => $amount,
+                'ref' => $transaction_ref
             ]);
 
-        } elseif ($resultCode == "E8003") {
-            //ResultCode: E8027
-            //ResultDesc: System is unable to process your request now, please try later
-            //Scenario: Occurs when there is a mismatch with credentials I.e password and thirdPartyID fields.
+            // For testing, simulate successful Zamtel response
+            $payment = Payment::find($transaction_id);
+            if ($payment) {
+                // Update payment status
+                $payment->update([
+                    'payment_status_id' => 1 // success
+                ]);
 
-            Log::info("Zamtel SOAP Error Code ".$resultCode);
-            Log::info("Zamtel SOAP Error Description ".$resultDesc);
+                // Call SparkMeter API with correct endpoint
+                $sparkResult = $this->processSparkMeterPayment(
+                    $payment->customer_id,
+                    $amount,
+                    $transaction_ref,
+                    $payment->customer_number
+                );
 
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
+                if ($sparkResult['success']) {
+                    // Send success message
+                    $this->sendNotification(
+                        $payment->phone_number,
+                        "Dear Customer,\n\n" .
+                        "Your electricity purchase was successful!\n" .
+                        "Amount: K" . number_format($amount, 2) . "\n" .
+                        "Reference: " . $transaction_ref . "\n" .
+                        "Date: " . now()->format('d-m-Y H:i') . "\n" .
+                        "Thank you for choosing REA."
+                    );
+
+                    return true;
+                } else {
+                    // Update payment record with error
+                    $payment->update([
+                        'payment_status_id' => 3,
+                        'error_message' => $sparkResult['message']
+                    ]);
+
+                    return false;
+                }
+            }
+
+            return false;
+
+        } catch (\Exception $e) {
+            Log::error("Payment processing error", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
-
-        }  elseif ($resultCode == "E8027") {
-            //ResultCode: E8027
-            //ResultDesc: System is unable to process your request now, please try later
-            //Scenario: Occurs when there is a mismatch with credentials I.e password and thirdPartyID fields.
-
-            Log::info("Zamtel SOAP Error Code ".$resultCode);
-            Log::info("Zamtel SOAP Error Description ".$resultDesc);
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
-            ]);
-
-        } elseif ($resultCode == "2001") {
-            //ResultCode: 2001
-            //ResultDesc: Initiator authentication error.
-            //Scenario: Occurs when there is a mismatch with Initiator credentials i.e Identifier and SecurityCredential fields.
-
-            Log::info("Zamtel SOAP Error Code ".$resultCode);
-            Log::info("Zamtel SOAP Error Description ".$resultDesc);
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
-            ]);
-
-        } elseif ($resultCode == "2006") {
-            //ResultCode: 2001
-            //ResultDesc: Initiator authentication error.
-            //Scenario: Occurs when there is a mismatch with Initiator credentials i.e Identifier and SecurityCredential fields.
-
-            Log::info("Zamtel SOAP Error Code ".$resultCode);
-            Log::info("Zamtel SOAP Error Description Insufficient Balance");
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
-            ]);
-
-        }elseif ($resultCode == "-1" && $resultCode == -1) {
-            //ResultCode: -1
-            //ResultDesc: System internal error.
-            //Scenario: Occurs when there is a connection timeout.
-
-            Log::info("Zamtel SOAP Error Code ".$resultCode);
-            Log::info("Zamtel SOAP Error Description ".$resultDesc);
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
-            ]);
-
-        }else {
-            //failed
-            Log::info("Zamtel SOAP", ["Failed Response" => $resultCode]);
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
-            ]);
+            return false;
         }
-
-        return true;
-
-
     }
+
+    private function processSparkMeterPayment($customerId, $amount, $externalId, $customerCode)
+    {
+        try {
+            Log::info("SparkMeter Payment Request", [
+                'amount' => $amount,
+                'external_id' => $externalId,
+                'customer_code' => 'Ntambu-22250'
+            ]);
+
+            $curl = curl_init();
+
+            $requestBody = json_encode([
+                'amount' => (string)$amount,
+                'memo' => 'USSD Payment',
+                'external_id' => (string)$externalId,
+                'customer_code' => 'Ntambu-22250'
+            ]);
+
+            Log::info("SparkMeter Request Body", [
+                'body' => $requestBody
+            ]);
+
+            curl_setopt_array($curl, array(
+                CURLOPT_URL => 'https://www.sparkmeter.cloud/api/v1/payments',
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_ENCODING => '',
+                CURLOPT_MAXREDIRS => 10,
+                CURLOPT_TIMEOUT => 0,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                CURLOPT_CUSTOMREQUEST => 'POST',
+                CURLOPT_POSTFIELDS => $requestBody,
+                CURLOPT_HTTPHEADER => array(
+                    'Accept: application/json',
+                    'Content-Type: application/json',
+                    'X-API-KEY: LKCIkIPzsiALD3BNGhJf9LaAIRNuv_xJPfTpnL1tJls',
+                    'X-API-SECRET: qDCEAqmoLg5vtPNNLoszByHBecCT$0m)'
+                ),
+            ));
+
+            $response = curl_exec($curl);
+            $http_status_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+
+            if (curl_errno($curl)) {
+                Log::error("SparkMeter CURL Error", [
+                    'error' => curl_error($curl)
+                ]);
+            }
+
+            curl_close($curl);
+
+            Log::info("SparkMeter Payment Response", [
+                'status_code' => $http_status_code,
+                'response' => $response
+            ]);
+
+            $decoded_response = json_decode($response, true);
+
+            if ($http_status_code == 201 || $http_status_code == 200) {
+                if (isset($decoded_response['errors']) && !empty($decoded_response['errors'])) {
+                    Log::error("SparkMeter Payment Error", [
+                        'errors' => $decoded_response['errors']
+                    ]);
+
+                    return [
+                        'success' => false,
+                        'message' => $decoded_response['errors'][0]['details'] ?? 'Payment failed'
+                    ];
+                }
+
+                Log::info("SparkMeter Payment Success", [
+                    'response' => $decoded_response
+                ]);
+
+                return [
+                    'success' => true,
+                    'token' => $decoded_response['data']['id'] ?? null,
+                    'amount' => $decoded_response['data']['amount']['value'] ?? $amount,
+                    'status' => $decoded_response['data']['status'] ?? 'completed'
+                ];
+            } else {
+                $error_message = isset($decoded_response['errors']) ?
+                            $decoded_response['errors'][0]['details'] :
+                            'Unknown error';
+
+                Log::error("SparkMeter Payment Failed", [
+                    'status_code' => $http_status_code,
+                    'error' => $error_message,
+                    'response' => $decoded_response
+                ]);
+
+                return [
+                    'success' => false,
+                    'message' => $error_message
+                ];
+            }
+
+        } catch (\Exception $e) {
+            Log::error("SparkMeter Payment Exception", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Service error'
+            ];
+        }
+    }
+
 
     function createTransactionSparkApi($payment_id, $customer_id, $amount, $ref_number, $phone_number): void
     {
@@ -1386,7 +1443,7 @@ class UssdSessionController extends Controller
 
             //send message to the client
             $message_string = "You have successfully topped up your electricity for K".$amount.". Transaction number " . $transaction_id;
-            $this->sendMessage($message_string, $phone_number);
+            $this->sendNotification($phone, $message_string);
 
         } else {
             // Decode the JSON response
@@ -1420,15 +1477,27 @@ class UssdSessionController extends Controller
     //send sms notification
     function sendNotification($phone, $message_string): void
     {
-        $url_encoded_message = urlencode($message_string);
+        try {
+            $url_encoded_message = urlencode($message_string);
+            $url = 'https://www.cloudservicezm.com/smsservice/httpapi?username=Blessmore&password=Blessmore&msg=' .
+                   $url_encoded_message . '.+&shortcode=2343&sender_id=REA&phone=' . $phone . '&api_key=121231313213123123';
 
-        $url = 'https://www.cloudservicezm.com/smsservice/httpapi?username=Blessmore&password=Blessmore&msg=' . $url_encoded_message . '.+&shortcode=2343&sender_id=REA&phone=' . $phone . '&api_key=121231313213123123';
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            $response = curl_exec($ch);
+            curl_close($ch);
 
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Use this only if you have SSL verification issues
-        $response = curl_exec($ch);
-        curl_close($ch);
+            Log::info('SMS sent', [
+                'phone' => $phone,
+                'message' => $message_string
+            ]);
+        } catch (\Exception $e) {
+            Log::error('SMS sending failed', [
+                'error' => $e->getMessage(),
+                'phone' => $phone
+            ]);
+        }
     }
 
 
