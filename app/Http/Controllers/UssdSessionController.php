@@ -622,13 +622,54 @@ class UssdSessionController extends Controller
         UssdSession::where('session_id', $session_id)->update($update_data);
     }
 
-    private function isWhitelistedAgent($phone)
+    private function standardizePhoneNumber($phone)
     {
-        return Agent::where('agent_phone_number', $phone)
-            ->where('is_active', true)
-            ->exists();
+        // Remove any spaces or special characters
+        $phone = preg_replace('/[^0-9]/', '', $phone);
+
+        // If number starts with '260', keep it as is
+        if (strpos($phone, '260') === 0) {
+            return $phone;
+        }
+
+        // If number starts with '0', replace with '260'
+        if (strpos($phone, '0') === 0) {
+            return '260' . substr($phone, 1);
+        }
+
+        // If number has neither prefix, add '260'
+        if (strlen($phone) === 9) {
+            return '260' . $phone;
+        }
+
+        return $phone;
     }
 
+    private function isWhitelistedAgent($phone)
+    {
+        // Standardize the input phone number
+        $standardizedPhone = $this->standardizePhoneNumber($phone);
+
+        // Check for the phone number in multiple formats
+        return Agent::where(function($query) use ($standardizedPhone, $phone) {
+            $query->where('agent_phone_number', $standardizedPhone)
+                ->orWhere('agent_phone_number', $phone)
+                ->orWhere('agent_phone_number', '0' . substr($standardizedPhone, 3))
+                // ->orWhere('business_phone_number', $standardizedPhone)
+                // ->orWhere('personal_phone_number', $standardizedPhone)
+                ;
+        })
+        ->where('is_active', true)
+        ->exists();
+
+        Log::info('Agent whitelist check', [
+            'original_phone' => $phone,
+            'standardized_phone' => $standardizedPhone,
+            'is_whitelisted' => $exists
+        ]);
+
+        return $exists;
+    }
     private function validateCustomer($customerCode)
     {
         try {
@@ -1049,19 +1090,31 @@ class UssdSessionController extends Controller
     private function validateAgentPin($phone, $pin)
     {
         try {
+            // Standardize the phone number first
+            $standardizedPhone = $this->standardizePhoneNumber($phone);
+
             Log::info('Starting PIN validation', [
-                'phone' => $phone,
-                'pin_length' => strlen($pin),
-                'raw_pin' => $pin
+                'original_phone' => $phone,
+                'standardized_phone' => $standardizedPhone,
+                'pin_length' => strlen($pin)
             ]);
 
-            // Find agent first
-            $agent = Agent::where('agent_phone_number', $phone)
-                        ->where('is_active', true)
-                        ->first();
+            // Find agent with multiple phone number formats
+            $agent = Agent::where(function($query) use ($standardizedPhone, $phone) {
+                $query->where('agent_phone_number', $standardizedPhone)
+                    ->orWhere('agent_phone_number', $phone)
+                    ->orWhere('agent_phone_number', '0' . substr($standardizedPhone, 3))
+                    ->orWhere('business_phone_number', $standardizedPhone)
+                    ->orWhere('personal_phone_number', $standardizedPhone);
+            })
+            ->where('is_active', true)
+            ->first();
 
             if (!$agent) {
-                Log::warning('No agent found for phone number', ['phone' => $phone]);
+                Log::warning('No agent found for phone number', [
+                    'phone' => $phone,
+                    'standardized_phone' => $standardizedPhone
+                ]);
                 return null;
             }
 
@@ -1073,8 +1126,8 @@ class UssdSessionController extends Controller
                 'pin_match' => ($agent->pin === $pin)
             ]);
 
-            // Check PIN
-            if ($agent->pin === $pin) {
+            // Ensure we're comparing strings
+            if ((string)$agent->pin === (string)$pin) {
                 Log::info('PIN validated successfully', [
                     'agent_id' => $agent->id,
                     'business_name' => $agent->business_name
