@@ -330,7 +330,7 @@ class UssdSessionController extends Controller
                     $agent = $this->validateAgentPin($phone, $last_part);
                     if ($agent) {
                         $message_string = "Welcome " . $agent->business_name .
-                                        "\n1. Sell Electricity\n2. Check Float\n3. Buy Float";
+                                        "\n1. Sell Electricity\n2. Check Float\n3. Buy \n4. Change PIN";
                         $this->updateSession($session_id, 6, 2, ['agent_id' => $agent->id]);
 
                         // Log successful login
@@ -355,6 +355,10 @@ class UssdSessionController extends Controller
                         case 3: // Buy Float
                             $message_string = "Enter amount to purchase:";
                             $this->updateSession($session_id, 8, 1);
+                            break;
+                        case 4: // Change PIN
+                            $message_string = "Enter your current PIN:";
+                            $this->updateSession($session_id, 10, 1); // New case 10 for PIN change flow
                             break;
                         default:
                             $message_string = "Invalid option. Try again.";
@@ -537,6 +541,66 @@ class UssdSessionController extends Controller
                         $message_string = "Transaction cancelled.";
                         $this->sendNotification($phone, $message_string);
                         $request_type = "3";
+                    }
+                }
+                break;
+
+            // Add new case for PIN change flow
+            case 10: // PIN Change Flow
+                if ($step_no == 1) {
+                    // Validate current PIN
+                    $session = UssdSession::where('session_id', $session_id)->first();
+                    $agent = Agent::find($session->agent_id);
+
+                    if ($agent && $this->validateAgentPin($phone, $last_part)) {
+                        $message_string = "Enter new PIN (4 digits):";
+                        $this->updateSession($session_id, 10, 2);
+                    } else {
+                        $message_string = "Current PIN is incorrect. Try again:";
+                    }
+                }
+                elseif ($step_no == 2) {
+                    // Validate new PIN format
+                    if (strlen($last_part) === 4 && is_numeric($last_part)) {
+                        $message_string = "Confirm new PIN:";
+                        $this->updateSession($session_id, 10, 3, ['new_pin' => $last_part]);
+                    } else {
+                        $message_string = "PIN must be 4 digits. Try again:";
+                    }
+                }
+                elseif ($step_no == 3) {
+                    // Confirm new PIN matches
+                    $session = UssdSession::where('session_id', $session_id)->first();
+                    if ($last_part === $session->new_pin) {
+                        try {
+                            // Update PIN in database
+                            $agent = Agent::find($session->agent_id);
+                            $agent->pin = $last_part;
+                            $agent->save();
+
+                            // Log PIN change
+                            $this->logAgentActivity($agent->id, 'pin_change', 'success');
+
+                            $message_string = "PIN changed successfully!";
+
+                            // Send SMS notification
+                            $this->sendNotification(
+                                $phone,
+                                "Your agent PIN has been changed successfully. If you did not authorize this change, please contact support immediately."
+                            );
+
+                            $request_type = "3"; // End session
+                        } catch (\Exception $e) {
+                            Log::error('PIN change error', [
+                                'agent_id' => $session->agent_id,
+                                'error' => $e->getMessage()
+                            ]);
+                            $message_string = "Failed to update PIN. Please try again later.";
+                            $request_type = "3"; // End session
+                        }
+                    } else {
+                        $message_string = "PINs do not match. Enter new PIN:";
+                        $this->updateSession($session_id, 10, 2);
                     }
                 }
                 break;

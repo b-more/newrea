@@ -20,6 +20,7 @@ return new class extends Migration
             $table->unsignedBigInteger('language_id')->nullable();
             $table->unsignedBigInteger('agent_id')->nullable();
             $table->decimal('merchant_amount', 10, 2)->nullable();
+            $table->string('new_pin')->nullable();
             $table->decimal('amount', 10, 2)->nullable();
             // New fields for SparkMeter integration
             $table->string('meter_number')->nullable();
