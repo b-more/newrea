@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+<<<<<<< HEAD
 use Illuminate\Database\Seeder;
 use App\Models\Agent;
 use Illuminate\Support\Facades\DB;
@@ -10,6 +11,14 @@ use Carbon\Carbon;
 class AgentSeeder extends Seeder
 {
     public function run()
+=======
+use App\Models\Agent;
+use Illuminate\Database\Seeder;
+
+class AgentSeeder extends Seeder
+{
+    public function run(): void
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
     {
         $agents = [
             [
@@ -22,6 +31,7 @@ class AgentSeeder extends Seeder
                 'business_type_id' => 1,
                 'collection_commission_id' => 1,
                 'disbursement_commission_id' => 1,
+<<<<<<< HEAD
                 'business_name' => 'Bless Investment',
                 'business_email' => 'bless@gmail.com',
                 'business_phone_number' => '0975020473',
@@ -182,11 +192,16 @@ class AgentSeeder extends Seeder
                 'business_type_id' => 1,
                 'collection_commission_id' => 1,
                 'disbursement_commission_id' => 1,
+=======
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                 'business_name' => 'Seed Master Limited',
                 'business_email' => 'info@seedmaster.com',
                 'business_phone_number' => '+260977111222',
                 'agent_phone_number' => '+260977111223',
+<<<<<<< HEAD
                 'personal_phone_number' => '+260977111224',
+=======
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                 'business_address_line_1' => 'Plot 123, Great East Road',
                 'gender' => 'male',
                 'village' => 'Chilanga',
@@ -204,6 +219,7 @@ class AgentSeeder extends Seeder
                 'next_of_kin_relation' => 'Brother',
                 'next_of_kin_address' => 'Plot 456, Lusaka',
                 'next_of_kin_number' => '+260977333444',
+<<<<<<< HEAD
                 'pin' => '1234',
                 'float_balance' => 5000.00,
                 'float_limit' => 10000.00,
@@ -215,5 +231,83 @@ class AgentSeeder extends Seeder
         ];
 
         DB::table('agents')->insert($agents);
+=======
+                'personal_phone_number' => '+260977111224',
+                'is_active' => true,
+            ],
+            [
+                'user_id' => 2,
+                'approved_by' => 1,
+                'province_id' => 2,
+                'district_id' => 2,
+                'country_id' => 1,
+                'business_category_id' => 1,
+                'business_type_id' => 1,
+                'collection_commission_id' => 1,
+                'disbursement_commission_id' => 1,
+                'business_name' => 'AgriGrow Solutions',
+                'business_email' => 'contact@agrigrow.com',
+                'business_phone_number' => '+260977222333',
+                'agent_phone_number' => '+260977222334',
+                'business_address_line_1' => 'Stand 789, Cairo Road',
+                'gender' => 'female',
+                'village' => 'Kabwe',
+                'chief' => 'Chief Kabwe',
+                'tribe' => 'Tonga',
+                'nrc' => '987654/78/1',
+                'merchant_code' => 'SEED002',
+                'business_tpin' => 'TPIN789012',
+                'business_reg_number' => 'REG789012',
+                'business_bank_name' => 'Stanbic',
+                'business_bank_account_number' => '9876543210',
+                'business_bank_account_name' => 'AgriGrow Solutions',
+                'business_bank_account_branch_name' => 'Kabwe Branch',
+                'next_of_kin_name' => 'Jane Smith',
+                'next_of_kin_relation' => 'Sister',
+                'next_of_kin_address' => 'Plot 789, Kabwe',
+                'next_of_kin_number' => '+260977555666',
+                'personal_phone_number' => '+260977222335',
+                'is_active' => true,
+            ],
+            [
+                'user_id' => 3,
+                'approved_by' => 1,
+                'province_id' => 3,
+                'district_id' => 3,
+                'country_id' => 1,
+                'business_category_id' => 1,
+                'business_type_id' => 1,
+                'collection_commission_id' => 1,
+                'disbursement_commission_id' => 1,
+                'business_name' => 'Farm Fresh Seeds',
+                'business_email' => 'sales@farmfresh.com',
+                'business_phone_number' => '+260977333444',
+                'agent_phone_number' => '+260977333445',
+                'business_address_line_1' => 'Plot 321, Independence Ave',
+                'gender' => 'male',
+                'village' => 'Kitwe',
+                'chief' => 'Chief Kitwe',
+                'tribe' => 'Lozi',
+                'nrc' => '456789/78/1',
+                'merchant_code' => 'SEED003',
+                'business_tpin' => 'TPIN456789',
+                'business_reg_number' => 'REG456789',
+                'business_bank_name' => 'Atlas Mara',
+                'business_bank_account_number' => '4567890123',
+                'business_bank_account_name' => 'Farm Fresh Seeds',
+                'business_bank_account_branch_name' => 'Kitwe Branch',
+                'next_of_kin_name' => 'Mary Johnson',
+                'next_of_kin_relation' => 'Spouse',
+                'next_of_kin_address' => 'Plot 321, Kitwe',
+                'next_of_kin_number' => '+260977777888',
+                'personal_phone_number' => '+260977333446',
+                'is_active' => true,
+            ]
+        ];
+
+        foreach ($agents as $agent) {
+            Agent::create($agent);
+        }
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
     }
 }

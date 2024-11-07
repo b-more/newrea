@@ -217,7 +217,10 @@ class UssdSessionController extends Controller
                             } else {
                                 $message_string = "Unauthorized access. Contact support.";
                                 $request_type = "3";
+<<<<<<< HEAD
                                 $this->sendNotification($phone, $message_string);
+=======
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                             }
                             break;
                         default:
@@ -230,6 +233,7 @@ class UssdSessionController extends Controller
                     if ($step_no == 1) {
                         $customer = $this->validateCustomer($last_part);
                         if ($customer) {
+<<<<<<< HEAD
                             // Default test amount
                             $amount = 100;
 
@@ -266,6 +270,43 @@ class UssdSessionController extends Controller
                         } else {
                             $message_string = "Invalid customer code. Try again:";
                         }
+=======
+                            $message_string = "Customer: " . $customer->name .
+                                            "\nMeter: " . $customer->meter_number .
+                                            "\nEnter amount:";
+
+                            $this->updateSession($session_id, 2, 2, [
+                                'customer_id' => $customer->id,
+                                'meter_number' => $customer->meter_number,
+                                'customer_number' => $customer->customer_number
+                            ]);
+                        } else {
+                            $message_string = "Invalid customer code. Try again:";
+                        }
+                    } elseif ($step_no == 2 && is_numeric($last_part)) {
+                        if ($last_part <= 0) {
+                            $message_string = "Invalid amount. Try again:";
+                        } else {
+                            $session = UssdSession::where('session_id', $session_id)->first();
+
+                            // Call the payment function which handles Zamtel integration
+                            $result = $this->payment(
+                                $phone,
+                                $last_part,
+                                $session->meter_number,
+                                $session->customer_id
+                            );
+
+                            if ($result) {
+                                $message_string = "Please enter your Zamtel Money PIN to complete the transaction of K" .
+                                                number_format($last_part, 2) .
+                                                " for electricity purchase.";
+                            } else {
+                                $message_string = "Payment initiation failed. Please try again later.";
+                            }
+                            $request_type = "3";
+                        }
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                     }
                     break;
 
@@ -287,7 +328,15 @@ class UssdSessionController extends Controller
                                                         $balanceCheck['balance'];
 
                                         // Send balance via SMS
+<<<<<<< HEAD
                                         $this->sendNotification($phone, $message_string);
+=======
+                                        $this->sendSms($phone,
+                                            "Your electricity balance is " .
+                                            $balanceCheck['currency'] . " " .
+                                            $balanceCheck['balance']
+                                        );
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                                     } else {
                                         $message_string = "Failed to check balance. Please try again later.";
                                     }
@@ -315,8 +364,11 @@ class UssdSessionController extends Controller
                                                     "Date: " . $payment->created_at->format('Y-m-d H:i:s') . "\n" .
                                                     "Status: Success\n" .
                                                     "Meter: " . $payment->meter_number;
+<<<<<<< HEAD
                                                     $this->sendNotification($phone, $message_string);
 
+=======
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                                 } else {
                                     $message_string = "Transaction not found";
                                 }
@@ -330,7 +382,11 @@ class UssdSessionController extends Controller
                     $agent = $this->validateAgentPin($phone, $last_part);
                     if ($agent) {
                         $message_string = "Welcome " . $agent->business_name .
+<<<<<<< HEAD
                                         "\n1. Sell Electricity\n2. Check Float\n3. Buy \n4. Change PIN";
+=======
+                                        "\n1. Sell Electricity\n2. Check Float\n3. Buy Float";
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                         $this->updateSession($session_id, 6, 2, ['agent_id' => $agent->id]);
 
                         // Log successful login
@@ -338,7 +394,10 @@ class UssdSessionController extends Controller
                     } else {
                         $message_string = "Invalid PIN. Try again:";
                         $this->logAgentActivity(null, 'login', 'failed');
+<<<<<<< HEAD
                         $this->sendNotification($phone, $message_string);
+=======
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                     }
                 } elseif ($step_no == 2 && is_numeric($last_part)) {
                     switch ($last_part) {
@@ -356,10 +415,13 @@ class UssdSessionController extends Controller
                             $message_string = "Enter amount to purchase:";
                             $this->updateSession($session_id, 8, 1);
                             break;
+<<<<<<< HEAD
                         case 4: // Change PIN
                             $message_string = "Enter your current PIN:";
                             $this->updateSession($session_id, 10, 1); // New case 10 for PIN change flow
                             break;
+=======
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                         default:
                             $message_string = "Invalid option. Try again.";
                     }
@@ -385,7 +447,10 @@ class UssdSessionController extends Controller
                                 if ($agent->float_balance <= 0) {
                                     $message_string = "Insufficient float balance. Please top up first.";
                                     $request_type = "3";
+<<<<<<< HEAD
                                     $this->sendNotification($phone, $message_string);
+=======
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                                     break;
                                 }
 
@@ -429,7 +494,10 @@ class UssdSessionController extends Controller
                                 $message_string = "Amount exceeds float balance (K" .
                                                 number_format($agent->float_balance, 2) .
                                                 "). Try again:";
+<<<<<<< HEAD
                                 $this->sendNotification($phone, $message_string);
+=======
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                                 break;
                             }
 
@@ -475,11 +543,18 @@ class UssdSessionController extends Controller
                                     if ($customer) {
                                         $this->sendSms(
                                             $customer->phone_number,
+<<<<<<< HEAD
                                            $message_string = "Your electricity token: " . $result['token'] .
                                             "\nAmount: K" . number_format($session->amount, 2) .
                                             "\nRef: " . $result['external_id']
                                         );
                                         $this->sendNotification($phone, $message_string);
+=======
+                                            "Your electricity token: " . $result['token'] .
+                                            "\nAmount: K" . number_format($session->amount, 2) .
+                                            "\nRef: " . $result['external_id']
+                                        );
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                                     }
                                 } else {
                                     $message_string = "Payment failed: " . ($result['message'] ?? 'Unknown error');
@@ -531,19 +606,28 @@ class UssdSessionController extends Controller
                         if ($result['success']) {
                             $message_string = "Payment successful\nToken: " . $result['token'];
                             $this->sendSms($phone, "Payment successful. Token: " . $result['token']);
+<<<<<<< HEAD
                             $this->sendNotification($phone, $message_string);
                         } else {
                             $message_string = "Payment failed: " . $result['message'];
                             $this->sendNotification($phone, $message_string);
+=======
+                        } else {
+                            $message_string = "Payment failed: " . $result['message'];
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                         }
                         $request_type = "3";
                     } else {
                         $message_string = "Transaction cancelled.";
+<<<<<<< HEAD
                         $this->sendNotification($phone, $message_string);
+=======
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                         $request_type = "3";
                     }
                 }
                 break;
+<<<<<<< HEAD
 
             // Add new case for PIN change flow
             case 10: // PIN Change Flow
@@ -604,6 +688,8 @@ class UssdSessionController extends Controller
                     }
                 }
                 break;
+=======
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
         }
 
         return $this->formatResponse($message_string, $request_type);
@@ -686,6 +772,7 @@ class UssdSessionController extends Controller
         UssdSession::where('session_id', $session_id)->update($update_data);
     }
 
+<<<<<<< HEAD
     private function standardizePhoneNumber($phone)
     {
         // Remove any spaces or special characters
@@ -734,6 +821,15 @@ class UssdSessionController extends Controller
 
         return $exists;
     }
+=======
+    private function isWhitelistedAgent($phone)
+    {
+        return Agent::where('agent_phone_number', $phone)
+            ->where('is_active', true)
+            ->exists();
+    }
+
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
     private function validateCustomer($customerCode)
     {
         try {
@@ -1034,7 +1130,11 @@ class UssdSessionController extends Controller
             }
 
             // 4. Generate reference
+<<<<<<< HEAD
             $reference = 'FLT' . rand(100000, 999999);
+=======
+            $reference = 'FLT' . rand(1000000000, 9999999999);
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
 
             try {
                 // 5. Create float transaction
@@ -1057,16 +1157,37 @@ class UssdSessionController extends Controller
                 // 6. Create payment record
                 $payment = Payment::create([
                     'phone_number' => $customer->phone_number,
+<<<<<<< HEAD
+=======
+                    'payment_method_id' => 3,        // Agent Float
+                    'payment_channel_id' => 3,       // zamtel
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                     'meter_number' => $meter_number,
                     'customer_id' => $customer_id,
                     'agent_id' => $agent_id,
                     'amount_paid' => $amount,
+<<<<<<< HEAD
                     'payment_status_id' => 0,
                     'payment_reference_number' => $reference
                 ]);
 
                 // 7. Mock successful payment (for testing)
                 $token = 'TOK' . rand(1000000, 9999999);
+=======
+                    'payment_status_id' => 1,
+                    'payment_reference_number' => $reference,
+                    'retry_count' => 1,
+                    'transaction_type_id' => 1,      // credit
+                ]);
+
+                Log::info('Payment record created', [
+                    'payment_id' => $payment->id,
+                    'reference' => $ref_number
+                ]);
+
+                // 7. Mock successful payment (for testing)
+                $token = 'TOK' . rand(10000000000, 99999999999);
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                 $units = round($amount / 7.08, 2);
 
                 // 8. Update agent float balance
@@ -1154,6 +1275,7 @@ class UssdSessionController extends Controller
     private function validateAgentPin($phone, $pin)
     {
         try {
+<<<<<<< HEAD
             // Standardize the phone number first
             $standardizedPhone = $this->standardizePhoneNumber($phone);
 
@@ -1179,6 +1301,21 @@ class UssdSessionController extends Controller
                     'phone' => $phone,
                     'standardized_phone' => $standardizedPhone
                 ]);
+=======
+            Log::info('Starting PIN validation', [
+                'phone' => $phone,
+                'pin_length' => strlen($pin),
+                'raw_pin' => $pin
+            ]);
+
+            // Find agent first
+            $agent = Agent::where('agent_phone_number', $phone)
+                        ->where('is_active', true)
+                        ->first();
+
+            if (!$agent) {
+                Log::warning('No agent found for phone number', ['phone' => $phone]);
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                 return null;
             }
 
@@ -1190,8 +1327,13 @@ class UssdSessionController extends Controller
                 'pin_match' => ($agent->pin === $pin)
             ]);
 
+<<<<<<< HEAD
             // Ensure we're comparing strings
             if ((string)$agent->pin === (string)$pin) {
+=======
+            // Check PIN
+            if ($agent->pin === $pin) {
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                 Log::info('PIN validated successfully', [
                     'agent_id' => $agent->id,
                     'business_name' => $agent->business_name
@@ -1220,6 +1362,7 @@ class UssdSessionController extends Controller
         return $agent ? $agent->float_balance : 0;
     }
 
+<<<<<<< HEAD
     function payment($phone, $amount, $meter_no, $customer_id)
     {
         if (str_starts_with($phone, '75') || str_starts_with($phone, '95') || str_starts_with($phone, '095') || str_starts_with($phone, '26095') || str_starts_with($phone, '075') || str_starts_with($phone, '26075')) {
@@ -1262,11 +1405,126 @@ class UssdSessionController extends Controller
             //send payment to zamtel money
 
             return $this->zamtel_soap("260" . $phone_number, $amount, $initialised_transaction->id, $payment_ref);
+=======
+    // function payment($phone, $amount, $meter_no, $customer_id)
+    // {
+    //     if (str_starts_with($phone, '75') || str_starts_with($phone, '95') || str_starts_with($phone, '095') || str_starts_with($phone, '26095') || str_starts_with($phone, '075') || str_starts_with($phone, '26075')) {
+
+    //         //generate the random reference number
+    //         $payment_ref = $this->generateConversationId();
+
+    //         $phone_number = $phone;
+
+    //         if (str_starts_with($phone, '075')) {
+    //             $phone_number = ltrim($phone_number, '0');
+    //         }
+    //         if (str_starts_with($phone, '26075')) {
+    //             $phone_number = ltrim($phone_number, '260');
+    //         }
+    //         if (str_starts_with($phone, '26095')) {
+    //             $phone_number = ltrim($phone_number, '260');
+    //         }
+    //         if (str_starts_with($phone, '095')) {
+    //             $phone_number = ltrim($phone_number, '0');
+    //         }
+
+    //         //save payment intent into the database
+    //         $initialised_transaction = Payment::create([
+    //             'payment_method_id' => 2, // 1.Cash 2. mobile money
+    //             'payment_channel_id' => 3, //1. Airtel 2. MTN 3. Zamtel
+    //             'payment_reference_number' => $payment_ref,
+    //             'payment_route_id' => 2,
+    //             'phone_number' => $phone,
+    //             'meter_number' => $meter_no,
+    //             'amount_paid' => $amount,
+    //             'payment_status_id' => 2, //1. success 2. pending 3. failed
+    //             'transaction_type_id' => 1, //1.credit and 2. Debit
+    //             'customer_id' => $customer_id
+    //         ]);
+
+    //         $initialised_transaction->save();
+
+    //         //Zamtel Money
+    //         //send payment to zamtel money
+
+    //         return $this->zamtel_soap("260" . $phone_number, $amount, $initialised_transaction->id, $payment_ref);
+    //     }
+    // }
+
+    function payment($phone, $amount, $meter_no, $customer_id)
+    {
+        try {
+            Log::info('Starting payment process', [
+                'phone' => $phone,
+                'amount' => $amount,
+                'meter_no' => $meter_no,
+                'customer_id' => $customer_id
+            ]);
+
+            // Check if it's a Zamtel number
+            if (str_starts_with($phone, '75') ||
+                str_starts_with($phone, '95') ||
+                str_starts_with($phone, '095') ||
+                str_starts_with($phone, '26095') ||
+                str_starts_with($phone, '075') ||
+                str_starts_with($phone, '26075')) {
+
+                // Generate reference number
+                $payment_ref = $this->generateConversationId();
+
+                // Format phone number for Zamtel
+                $phone_number = $phone;
+                if (str_starts_with($phone, '075')) {
+                    $phone_number = ltrim($phone_number, '0');
+                }
+                if (str_starts_with($phone, '26075')) {
+                    $phone_number = ltrim($phone_number, '260');
+                }
+                if (str_starts_with($phone, '26095')) {
+                    $phone_number = ltrim($phone_number, '260');
+                }
+                if (str_starts_with($phone, '095')) {
+                    $phone_number = ltrim($phone_number, '0');
+                }
+
+                // Create initial payment record
+                $initialised_transaction = Payment::create([
+                    'payment_method_id' => 2, // mobile money
+                    'payment_channel_id' => 3, // Zamtel
+                    'payment_reference_number' => $payment_ref,
+                    'payment_route_id' => 2,
+                    'phone_number' => $phone,
+                    'meter_number' => $meter_no,
+                    'amount_paid' => $amount,
+                    'payment_status_id' => 2, // pending
+                    'transaction_type_id' => 1, // credit
+                    'customer_id' => $customer_id,
+                    'retry_count' => 1
+                ]);
+
+                // Call Zamtel SOAP
+                return $this->zamtel_soap(
+                    "260" . $phone_number,
+                    $amount,
+                    $initialised_transaction->id,
+                    $payment_ref
+                );
+            }
+
+            return false;
+        } catch (\Exception $e) {
+            Log::error('Payment initiation error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return false;
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
         }
     }
 
     function zamtel_soap($phone, $amount, $transaction_id, $transaction_ref)
     {
+<<<<<<< HEAD
 
         $current_date = Carbon::now();
         $timestamp = $current_date->format('YmdHis');
@@ -1456,6 +1714,180 @@ class UssdSessionController extends Controller
 
     }
 
+=======
+        try {
+            $current_date = Carbon::now();
+            $timestamp = $current_date->format('YmdHis');
+
+            Log::info("Zamtel SOAP Request", [
+                'phone' => $phone,
+                'amount' => $amount,
+                'ref' => $transaction_ref
+            ]);
+
+            // For testing, simulate successful Zamtel response
+            $payment = Payment::find($transaction_id);
+            if ($payment) {
+                // Update payment status
+                $payment->update([
+                    'payment_status_id' => 1 // success
+                ]);
+
+                // Call SparkMeter API with correct endpoint
+                $sparkResult = $this->processSparkMeterPayment(
+                    $payment->customer_id,
+                    $amount,
+                    $transaction_ref,
+                    $payment->customer_number
+                );
+
+                if ($sparkResult['success']) {
+                    // Send success message
+                    $this->sendNotification(
+                        $payment->phone_number,
+                        "Dear Customer,\n\n" .
+                        "Your electricity purchase was successful!\n" .
+                        "Amount: K" . number_format($amount, 2) . "\n" .
+                        "Reference: " . $transaction_ref . "\n" .
+                        "Date: " . now()->format('d-m-Y H:i') . "\n" .
+                        "Thank you for choosing REA."
+                    );
+
+                    return true;
+                } else {
+                    // Update payment record with error
+                    $payment->update([
+                        'payment_status_id' => 3,
+                        'error_message' => $sparkResult['message']
+                    ]);
+
+                    return false;
+                }
+            }
+
+            return false;
+
+        } catch (\Exception $e) {
+            Log::error("Payment processing error", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return false;
+        }
+    }
+
+    private function processSparkMeterPayment($customerId, $amount, $externalId, $customerCode)
+    {
+        try {
+            Log::info("SparkMeter Payment Request", [
+                'amount' => $amount,
+                'external_id' => $externalId,
+                'customer_code' => 'Ntambu-22250'
+            ]);
+
+            $curl = curl_init();
+
+            $requestBody = json_encode([
+                'amount' => (string)$amount,
+                'memo' => 'USSD Payment',
+                'external_id' => (string)$externalId,
+                'customer_code' => 'Ntambu-22250'
+            ]);
+
+            Log::info("SparkMeter Request Body", [
+                'body' => $requestBody
+            ]);
+
+            curl_setopt_array($curl, array(
+                CURLOPT_URL => 'https://www.sparkmeter.cloud/api/v1/payments',
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_ENCODING => '',
+                CURLOPT_MAXREDIRS => 10,
+                CURLOPT_TIMEOUT => 0,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                CURLOPT_CUSTOMREQUEST => 'POST',
+                CURLOPT_POSTFIELDS => $requestBody,
+                CURLOPT_HTTPHEADER => array(
+                    'Accept: application/json',
+                    'Content-Type: application/json',
+                    'X-API-KEY: LKCIkIPzsiALD3BNGhJf9LaAIRNuv_xJPfTpnL1tJls',
+                    'X-API-SECRET: qDCEAqmoLg5vtPNNLoszByHBecCT$0m)'
+                ),
+            ));
+
+            $response = curl_exec($curl);
+            $http_status_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+
+            if (curl_errno($curl)) {
+                Log::error("SparkMeter CURL Error", [
+                    'error' => curl_error($curl)
+                ]);
+            }
+
+            curl_close($curl);
+
+            Log::info("SparkMeter Payment Response", [
+                'status_code' => $http_status_code,
+                'response' => $response
+            ]);
+
+            $decoded_response = json_decode($response, true);
+
+            if ($http_status_code == 201 || $http_status_code == 200) {
+                if (isset($decoded_response['errors']) && !empty($decoded_response['errors'])) {
+                    Log::error("SparkMeter Payment Error", [
+                        'errors' => $decoded_response['errors']
+                    ]);
+
+                    return [
+                        'success' => false,
+                        'message' => $decoded_response['errors'][0]['details'] ?? 'Payment failed'
+                    ];
+                }
+
+                Log::info("SparkMeter Payment Success", [
+                    'response' => $decoded_response
+                ]);
+
+                return [
+                    'success' => true,
+                    'token' => $decoded_response['data']['id'] ?? null,
+                    'amount' => $decoded_response['data']['amount']['value'] ?? $amount,
+                    'status' => $decoded_response['data']['status'] ?? 'completed'
+                ];
+            } else {
+                $error_message = isset($decoded_response['errors']) ?
+                            $decoded_response['errors'][0]['details'] :
+                            'Unknown error';
+
+                Log::error("SparkMeter Payment Failed", [
+                    'status_code' => $http_status_code,
+                    'error' => $error_message,
+                    'response' => $decoded_response
+                ]);
+
+                return [
+                    'success' => false,
+                    'message' => $error_message
+                ];
+            }
+
+        } catch (\Exception $e) {
+            Log::error("SparkMeter Payment Exception", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Service error'
+            ];
+        }
+    }
+
+
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
     function createTransactionSparkApi($payment_id, $customer_id, $amount, $ref_number, $phone_number): void
     {
 
@@ -1505,7 +1937,11 @@ class UssdSessionController extends Controller
 
             //send message to the client
             $message_string = "You have successfully topped up your electricity for K".$amount.". Transaction number " . $transaction_id;
+<<<<<<< HEAD
             $this->sendMessage($message_string, $phone_number);
+=======
+            $this->sendNotification($phone, $message_string);
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
 
         } else {
             // Decode the JSON response
@@ -1539,6 +1975,7 @@ class UssdSessionController extends Controller
     //send sms notification
     function sendNotification($phone, $message_string): void
     {
+<<<<<<< HEAD
         $url_encoded_message = urlencode($message_string);
 
         $url = 'https://www.cloudservicezm.com/smsservice/httpapi?username=Blessmore&password=Blessmore&msg=' . $url_encoded_message . '.+&shortcode=2343&sender_id=REAPAY&phone=' . $phone . '&api_key=121231313213123123';
@@ -1548,6 +1985,29 @@ class UssdSessionController extends Controller
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Use this only if you have SSL verification issues
         $response = curl_exec($ch);
         curl_close($ch);
+=======
+        try {
+            $url_encoded_message = urlencode($message_string);
+            $url = 'https://www.cloudservicezm.com/smsservice/httpapi?username=Blessmore&password=Blessmore&msg=' .
+                   $url_encoded_message . '.+&shortcode=2343&sender_id=REA&phone=' . $phone . '&api_key=121231313213123123';
+
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            $response = curl_exec($ch);
+            curl_close($ch);
+
+            Log::info('SMS sent', [
+                'phone' => $phone,
+                'message' => $message_string
+            ]);
+        } catch (\Exception $e) {
+            Log::error('SMS sending failed', [
+                'error' => $e->getMessage(),
+                'phone' => $phone
+            ]);
+        }
+>>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
     }
 
 
