@@ -9,8 +9,16 @@ class CommunicationChannel extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['name'];
+    protected $fillable = [
+        'name',
+        'code',
+        'description',
+        'is_active'
+    ];
 
+    protected $casts = [
+        'is_active' => 'boolean'
+    ];
     protected $searchableFields = ['*'];
 
     protected $table = 'communication_channels';

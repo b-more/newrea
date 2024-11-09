@@ -22,6 +22,11 @@ return new class extends Migration
             $table->decimal('merchant_amount', 10, 2)->nullable();
             $table->string('new_pin')->nullable();
             $table->decimal('amount', 10, 2)->nullable();
+            $table->string('customer_code')->nullable();
+            $table->string('customer_name')->nullable();
+            $table->string('customer_phone')->nullable();
+            $table->string('reference_number')->nullable();
+            $table->json('transaction_data')->nullable();
 
             // New fields for SparkMeter integration
             $table->string('meter_number')->nullable();
@@ -29,7 +34,6 @@ return new class extends Migration
             $table->string('spark_id')->nullable();
             $table->decimal('sale_amount', 10, 2)->nullable();
             $table->decimal('float_amount', 10, 2)->nullable();
-            $table->json('transaction_data')->nullable();
             $table->timestamps();
 
             // Indexes

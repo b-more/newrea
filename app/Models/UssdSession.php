@@ -26,7 +26,13 @@ class UssdSession extends Model
         'spark_id',
         'sale_amount',
         'float_amount',
-        'transaction_data'
+        'transaction_data',
+        'customer_code',
+        'customer_name',
+        'customer_phone',
+        'meter_number',
+        'amount',
+        'reference_number',
     ];
 
     protected $casts = [

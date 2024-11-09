@@ -4,17 +4,17 @@ namespace App\Filament\Resources\CustomerFeedbackResource\Pages;
 
 use App\Filament\Resources\CustomerFeedbackResource;
 use Filament\Actions;
-use Filament\Resources\Pages\EditRecord;
+use Filament\Resources\Pages\ViewRecord;
 
-class EditCustomerFeedback extends EditRecord
+class ViewCustomerFeedback extends ViewRecord
 {
     protected static string $resource = CustomerFeedbackResource::class;
 
     protected function getHeaderActions(): array
     {
         return [
-            Actions\ViewAction::make(),
-            Actions\DeleteAction::make(),
+            Actions\EditAction::make()
+                ->visible(fn ($record) => $record->status !== 'closed'),
 
             Actions\Action::make('resolve')
                 ->icon('heroicon-o-check-circle')
@@ -36,18 +36,32 @@ class EditCustomerFeedback extends EditRecord
                         ->title('Feedback Resolved')
                         ->success()
                         ->send();
-
-                    $this->redirect($this->getResource()::getUrl('view', ['record' => $this->record]));
                 })
                 ->visible(fn (): bool =>
                     $this->record->status === 'pending' ||
                     $this->record->status === 'in_progress'
                 ),
-        ];
-    }
 
-    protected function getRedirectUrl(): string
-    {
-        return $this->getResource()::getUrl('view', ['record' => $this->record]);
+            Actions\Action::make('reopen')
+                ->icon('heroicon-o-arrow-path')
+                ->color('warning')
+                ->requiresConfirmation()
+                ->action(function (): void {
+                    $this->record->update([
+                        'status' => 'in_progress',
+                        'resolved_at' => null,
+                        'resolved_by' => null
+                    ]);
+
+                    \Filament\Notifications\Notification::make()
+                        ->title('Feedback Reopened')
+                        ->warning()
+                        ->send();
+                })
+                ->visible(fn (): bool =>
+                    $this->record->status === 'resolved' ||
+                    $this->record->status === 'closed'
+                ),
+        ];
     }
 }

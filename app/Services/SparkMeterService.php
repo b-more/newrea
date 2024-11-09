@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
@@ -75,6 +76,76 @@ class SparkMeterService
                 'success' => false,
                 'error' => $e->getMessage(),
                 'message' => $this->getErrorMessage($e)
+            ];
+        }
+    }
+
+    public function validateCustomer($customerCode)
+    {
+        try {
+            Log::info('Validating SparkMeter customer', [
+                'customer_code' => $customerCode
+            ]);
+
+            $response = Http::withHeaders([
+                'Accept' => 'application/json',
+                'Content-Type' => 'application/json',
+                'X-API-KEY' => $this->apiKey,
+                'X-API-SECRET' => $this->apiSecret
+            ])
+            ->timeout($this->timeout)
+            ->retry($this->retries, 100)
+            ->get($this->baseUrl . '/customers', [
+                'code' => $customerCode,
+                'reading_details' => true
+            ]);
+
+            Log::info('SparkMeter customer validation response', [
+                'status' => $response->status(),
+                'body' => $response->json()
+            ]);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                $customerData = $data['data'][0] ?? null;
+
+                if (!$customerData) {
+                    return [
+                        'success' => false,
+                        'message' => 'Customer not found'
+                    ];
+                }
+
+                // Extract and format customer data
+                return [
+                    'success' => true,
+                    'customer' => [
+                        'id' => $customerData['id'],
+                        'code' => $customerData['code'],
+                        'name' => $customerData['name'],
+                        'meter_number' => $customerData['meters'][0]['serial'] ?? null,
+                        'balance' => $customerData['balances']['credit']['value'] ?? '0.00',
+                        'phone_number' => $customerData['phone_number'] ?? null,
+                        'status' => $customerData['status'] ?? 'active'
+                    ]
+                ];
+            }
+
+            return [
+                'success' => false,
+                'message' => 'Failed to validate customer',
+                'error' => $response->json()['message'] ?? 'Validation failed'
+            ];
+
+        } catch (\Exception $e) {
+            Log::error('Customer validation error', [
+                'error' => $e->getMessage(),
+                'customer_code' => $customerCode
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Service temporarily unavailable'
             ];
         }
     }
@@ -268,16 +339,25 @@ class SparkMeterService
      */
     private function generateExternalId()
     {
-        $prefix = 'ZR'; // Prefix for your transactions
-        $date = date('ymd'); // Current date YYMMDD
-        $random = strtoupper(Str::random(4)); // Random 4 characters
-        return "{$prefix}{$random}-{$date}";
+        $prefix = 'Txn'; // Prefix for the complaint number
+
+        $random = rand(1000000000, 9999999999);
+
+        $raw_complaint_number = $prefix . $random;
+
+        // Check if the payment reference number already exists in the database
+        if (DB::table('payments')->where('payment_reference_number', $raw_complaint_number)->exists()) {
+            // If the payment reference number already exists, generate a new one recursively
+            return $this->generateExternalId();
+        }
+
+        return $raw_complaint_number;
     }
 
     /**
      * Process payment to SparkMeter
      */
-    public function processPayment($customerCode, $amount, $memo = 'Electricity purchase')
+    public function processPayment($customerCode, $amount, $memo = 'Cash payment')
     {
         try {
             $externalId = $this->generateExternalId();
@@ -285,57 +365,101 @@ class SparkMeterService
             Log::info('Processing SparkMeter payment', [
                 'customer_code' => $customerCode,
                 'amount' => $amount,
-                'external_id' => $externalId
+                'external_id' => $externalId,
+                'memo' => $memo
             ]);
 
             $response = Http::withHeaders([
                 'Accept' => 'application/json',
+                'Content-Type' => 'application/json',
                 'X-API-KEY' => $this->apiKey,
                 'X-API-SECRET' => $this->apiSecret
-            ])->post($this->baseUrl . '/credits', [
-                'amount' => (string)$amount,
+            ])
+            ->timeout($this->timeout)
+            ->retry($this->retries, 100, function ($exception) {
+                return $exception instanceof \Illuminate\Http\Client\ConnectionException
+                    || ($exception instanceof \Illuminate\Http\Client\RequestException
+                        && $exception->response->status() >= 500);
+            })
+            ->post($this->baseUrl . '/payments', [
+                'amount' => (string)number_format($amount, 2, '.', ''),
                 'memo' => $memo,
-                'customer_code' => $customerCode,
-                'external_id' => $externalId
+                'external_id' => $externalId,
+                'customer_code' => $customerCode
             ]);
 
             Log::info('SparkMeter payment response', [
                 'status' => $response->status(),
-                'body' => $response->json()
+                'body' => $response->json(),
+                'headers' => $response->headers()
             ]);
 
+            // Handle successful response
             if ($response->successful()) {
                 $data = $response->json();
 
+                // Check for any errors in the response
                 if (!empty($data['errors'])) {
+                    Log::error('SparkMeter payment API returned errors', [
+                        'errors' => $data['errors'],
+                        'request_data' => [
+                            'customer_code' => $customerCode,
+                            'amount' => $amount,
+                            'external_id' => $externalId
+                        ]
+                    ]);
                     return $this->handleApiError($data['errors']);
                 }
 
-                if (isset($data['data'])) {
-                    return [
-                        'success' => true,
-                        'transaction_id' => $data['data']['id'],
-                        'recipient_id' => $data['data']['recipient_id'],
-                        'amount' => $data['data']['amount']['value'],
-                        'currency' => $data['data']['amount']['currency'],
-                        'status' => $data['data']['status'],
-                        'external_id' => $data['data']['external_id']
-                    ];
-                }
+                // Extract token and other relevant information
+                $paymentData = $data['data'] ?? $data;
+
+                return [
+                    'success' => true,
+                    'transaction_id' => $paymentData['id'] ?? null,
+                    'token' => $paymentData['token'] ?? null,
+                    'external_id' => $externalId,
+                    'amount' => $amount,
+                    'customer_code' => $customerCode,
+                    'status' => $paymentData['status'] ?? 'completed',
+                    'raw_response' => $paymentData
+                ];
             }
 
-            return $this->handleApiError($response->json()['errors'] ?? []);
+            // Handle error responses
+            $errorMessage = $response->json()['message'] ?? 'Payment processing failed';
+            $errorStatus = $response->status();
 
-        } catch (\Exception $e) {
-            Log::error('Payment processing error', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+            Log::error('SparkMeter payment failed', [
+                'status_code' => $errorStatus,
+                'error_message' => $errorMessage,
+                'customer_code' => $customerCode,
+                'amount' => $amount,
+                'external_id' => $externalId
             ]);
 
             return [
                 'success' => false,
-                'message' => 'Payment processing failed',
-                'error' => $e->getMessage()
+                'message' => $this->getErrorMessage($errorStatus, $errorMessage),
+                'status' => 'failed',
+                'external_id' => $externalId,
+                'error_code' => $errorStatus
+            ];
+
+        } catch (\Exception $e) {
+            Log::error('SparkMeter payment exception', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'customer_code' => $customerCode,
+                'amount' => $amount
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Service temporarily unavailable. Please try again.',
+                'status' => 'error',
+                'error_type' => 'exception',
+                'error_details' => $this->getErrorMessage(500, $e->getMessage())
             ];
         }
     }

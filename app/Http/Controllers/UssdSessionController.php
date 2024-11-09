@@ -76,6 +76,100 @@ class UssdSessionController extends Controller
         ]
     ];
 
+    private function updateSession($sessionId, $caseNo, $stepNo, array $additionalData = []): void
+    {
+        try {
+            $updateData = array_merge([
+                'case_no' => $caseNo,
+                'step_no' => $stepNo,
+                'updated_at' => now()
+            ], $additionalData);
+
+            UssdSession::where('session_id', $sessionId)->update($updateData);
+
+            Log::info('Session updated', [
+                'session_id' => $sessionId,
+                'case_no' => $caseNo,
+                'step_no' => $stepNo,
+                'additional_data' => $additionalData
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Session update failed', [
+                'error' => $e->getMessage(),
+                'session_id' => $sessionId,
+                'data' => $updateData
+            ]);
+            throw $e;
+        }
+    }
+
+    function generateFeedbackNumber()
+    {
+
+        $prefix = 'FB'; // Prefix for the inquiry number
+
+        // Generate a random number between 1000000 and 9999999
+        $random = rand(1000000, 9999999); // 1000456
+
+        // Combine the prefix, random number, and suffix to form the account number
+        $feedback_number = $prefix . $random;  // CN1000456
+
+        // Check if the inquiry number already exists in the database
+        if (DB::table('customer_feedbacks')->where('feedback_number', $feedback_number)->exists()) {
+            // If the inquiry already exists, generate a new one recursively
+            return $this->generateFeedbackNumber();
+        }
+
+        return $feedback_number;
+    }
+
+    private function sendSmsNotification($phone, $message)
+    {
+        try {
+            Log::info('Sending SMS Notification', [
+                'phone' => $phone,
+                'message' => $message
+            ]);
+
+            $url_encoded_message = urlencode($message);
+            $url = 'https://www.cloudservicezm.com/smsservice/httpapi?' .
+                'username=Blessmore&password=Blessmore&msg=' . $url_encoded_message .
+                '.+&shortcode=2343&sender_id=REAPAY&phone=' . $phone .
+                '&api_key=121231313213123123';
+
+            Log::info('SMS API Request', [
+                'url' => $url
+            ]);
+
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            $response = curl_exec($ch);
+            $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+            Log::info('SMS API Response', [
+                'http_code' => $http_code,
+                'response' => $response,
+                'phone' => $phone
+            ]);
+
+            if ($http_code != 200) {
+                throw new \Exception('SMS API returned non-200 status code: ' . $http_code);
+            }
+
+            curl_close($ch);
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('SMS Sending Failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'phone' => $phone
+            ]);
+            return false;
+        }
+    }
+
     public function handleUssd(Request $request)
     {
         try {
@@ -97,11 +191,6 @@ class UssdSessionController extends Controller
             "last_part" => $last_part
         ]);
 
-        // First, let's define detailed complaint statuses
-
-
-
-        // Handle main menu navigation first
         // Check if input is just "*" (single asterisk)
         if (trim($user_input) === "*") {
             $this->updateSession($session_id, 1, 1);
@@ -164,15 +253,15 @@ class UssdSessionController extends Controller
                 } elseif ($step_no == 2 && is_numeric($last_part)) {
                     switch ($last_part) {
                         case 1:
-                            $message_string = "Enter your Customer ID:\n0. Back\n*. Main Menu";
+                            $message_string = "Enter your Customer ID:\n\n0. Back";
                             $this->updateSession($session_id, 2, 1);
                             break;
                         case 2:
-                            $message_string = "Enter your Customer ID:\n0. Back\n*. Main Menu";
+                            $message_string = "Enter your Customer ID:\n\n0. Back";
                             $this->updateSession($session_id, 3, 1);
                             break;
                         case 3:
-                            $message_string = "Enter Transaction ID:\n0. Back\n*. Main Menu";
+                            $message_string = "Enter Transaction ID:\n\n0. Back";
                             $this->updateSession($session_id, 4, 1);
                             break;
                         case 4: // Customer Desk - Start with Language Selection
@@ -181,22 +270,22 @@ class UssdSessionController extends Controller
                             foreach ($geLanguages as $index => $language) {
                                 $language_menu .= ($index + 1) . ". " . $language->name . "\n";
                             }
-                            $language_menu .= "\n0. Back\n*. Main Menu";
+                            $language_menu .= "\n0. Back";
                             $message_string = $language_menu;
                             $this->updateSession($session_id, 11, 1); // New case number for language selection
                             break;
                         case 5:
                             if ($this->isWhitelistedAgent($phone)) {
-                                $message_string = "Enter your PIN:\n0. Back\n*. Main Menu";
+                                $message_string = "Enter your PIN:\n\n\n0. Back";
                                 $this->updateSession($session_id, 6, 1);
                             } else {
-                                $message_string = "Unauthorized access. Contact support.\n*. Main Menu";
+                                $message_string = "Unauthorized access. Contact support.";
                                 $request_type = "3";
                                 $this->sendNotification($phone, $message_string);
                             }
                             break;
                         default:
-                            $message_string = "Invalid option. Please try again.\n*. Main Menu";
+                            $message_string = "Invalid option. Please try again.\n\n*. Main Menu";
                     }
                 }
                 break;
@@ -205,12 +294,7 @@ class UssdSessionController extends Controller
                 if ($step_no == 1) {
                     $customer = $this->validateCustomer($last_part);
                     if ($customer) {
-                        // Default test amount
-                        $amount = 100;
-
-                        $result = $this->sparkMeter->processPayment(
-                            $customer->customer_number,
-                            $amount,
+                        $result = $this->sparkMeter->processPayment($customer->customer_number,  $amount,
                             "USSD Electricity Purchase"
                         );
 
@@ -228,16 +312,16 @@ class UssdSessionController extends Controller
                             $message_string = "Payment Successful!\n" .
                                             "Amount: " . $result['currency'] . " " . $result['amount'] . "\n" .
                                             "Reference: " . $result['external_id'] . "\n" .
-                                            "Status: " . ucfirst($result['status']) . "\n\n*. Main Menu";
+                                            "Status: " . ucfirst($result['status']) . "\n";
 
                             $this->sendNotification($phone, $message_string);
                         } else {
-                            $message_string = $result['message'] . "\n0. Back\n*. Main Menu";
+                            $message_string = $result['message'] . "\n";
                             $this->sendNotification($phone, $message_string);
                         }
                         $request_type = "3";
                     } else {
-                        $message_string = "Invalid customer code. Try again:\n0. Back\n*. Main Menu";
+                        $message_string = "Invalid customer code. Try again:\n";
                     }
                 }
                 break;
@@ -428,15 +512,29 @@ class UssdSessionController extends Controller
                 }
                 break;
 
-            case 7: // Agent Electricity Sale
-                if ($step_no == 1) {
-                    try {
-                        Log::info('Processing customer validation for agent sale', [
-                            'input' => $last_part
-                        ]);
+                case 7: // Agent Electricity Sale
+                    if ($step_no == 1) {
+                        try {
+                            Log::info('Processing customer validation', [
+                                'input' => $last_part,
+                                'session_id' => $session_id
+                            ]);
 
-                        $customer = $this->validateCustomer($last_part);
-                        if ($customer) {
+                            // Validate customer using SparkMeter
+                            $customerValidation = $this->sparkMeter->validateCustomer($last_part);
+
+                            if (!$customerValidation['success']) {
+                                Log::warning('Customer validation failed', [
+                                    'customer_code' => $last_part,
+                                    'message' => $customerValidation['message']
+                                ]);
+                                $message_string = "Invalid customer code. Try again:\n0. Back\n*. Main Menu";
+                                break;
+                            }
+
+                            $customerData = $customerValidation['customer'];
+
+                            // Get agent details
                             $session = UssdSession::where('session_id', $session_id)->first();
                             $agent = Agent::find($session->agent_id);
 
@@ -447,122 +545,187 @@ class UssdSessionController extends Controller
                             if ($agent->float_balance <= 0) {
                                 $message_string = "Insufficient float balance. Please top up first.\n0. Back\n*. Main Menu";
                                 $request_type = "3";
-                                $this->sendNotification($phone, $message_string);
                                 break;
                             }
 
-                            Log::info('Customer validated for agent sale', [
-                                'customer_id' => $customer->id,
-                                'agent_id' => $agent->id
+                            // Store customer details in session
+                            $sessionData = [
+                                'customer_code' => $customerData['code'],
+                                'customer_name' => $customerData['name'],
+                                'meter_number' => $customerData['meter_number'],
+                                'customer_phone' => $customerData['phone_number'],
+                                'transaction_data' => [
+                                    'customer_balance' => $customerData['balance'],
+                                    'customer_id' => $customerData['id'],
+                                    'validation_time' => now()->toIso8601String()
+                                ]
+                            ];
+
+                            $this->updateSession($session_id, 7, 2, $sessionData);
+
+                            $message_string = "Customer Details:\n" .
+                                            "Name: " . $customerData['name'] . "\n" .
+                                            "Meter: " . $customerData['meter_number'] . "\n" .
+                                            "Balance: K" . $customerData['balance'] . "\n" .
+                                            "Your Float: K" . number_format($agent->float_balance, 2) . "\n\n" .
+                                            "Enter amount:\n0. Back\n*. Main Menu";
+
+                        } catch (\Exception $e) {
+                            Log::error('Customer validation error', [
+                                'error' => $e->getMessage(),
+                                'input' => $last_part,
+                                'session_id' => $session_id
                             ]);
 
-                            $message_string = "Customer: " . $customer->name .
-                                            "\nMeter: " . $customer->meter_number .
-                                            "\nAgent Float: K" . number_format($agent->float_balance, 2) .
-                                            "\n\nEnter amount:\n0. Back\n*. Main Menu";
-
-                            $this->updateSession($session_id, 7, 2, [
-                                'customer_id' => $customer->id,
-                                'meter_number' => $customer->meter_number,
-                                'customer_number' => $customer->customer_number
-                            ]);
-                        } else {
-                            $message_string = "Invalid customer code. Try again:\n0. Back\n*. Main Menu";
+                            $message_string = "Service error. Please try again.\n0. Back\n*. Main Menu";
                         }
-                    } catch (\Exception $e) {
-                        Log::error('Agent sale error', [
-                            'error' => $e->getMessage(),
-                            'trace' => $e->getTraceAsString()
-                        ]);
-                        $message_string = "Service error. Please try again.\n0. Back\n*. Main Menu";
-                        $request_type = "3";
                     }
-                } elseif ($step_no == 2 && is_numeric($last_part)) {
-                    try {
-                        $session = UssdSession::where('session_id', $session_id)->first();
-                        $agent = Agent::find($session->agent_id);
-
-                        if ($last_part <= 0) {
-                            $message_string = "Invalid amount. Try again:\n0. Back\n*. Main Menu";
-                            break;
-                        }
-
-                        if ($last_part > $agent->float_balance) {
-                            $message_string = "Amount exceeds float balance (K" .
-                                            number_format($agent->float_balance, 2) .
-                                            "). Try again:\n0. Back\n*. Main Menu";
-                            $this->sendNotification($phone, $message_string);
-                            break;
-                        }
-
-                        Log::info('Amount validation passed for agent sale', [
-                            'amount' => $last_part,
-                            'agent_id' => $agent->id
-                        ]);
-
-                        $this->updateSession($session_id, 7, 3, ['amount' => $last_part]);
-                        $message_string = "Confirm purchase:\n" .
-                                        "Amount: K" . number_format($last_part, 2) .
-                                        "\n1. Confirm\n2. Cancel\n0. Back\n*. Main Menu";
-
-                    } catch (\Exception $e) {
-                        Log::error('Amount validation error', ['error' => $e->getMessage()]);
-                        $message_string = "Service error. Please try again.\n0. Back\n*. Main Menu";
-                        $request_type = "3";
-                    }
-                } elseif ($step_no == 3 && is_numeric($last_part)) {
-                    try {
-                        if ($last_part == 1) {
+                    elseif ($step_no == 2 && is_numeric($last_part)) {
+                        try {
                             $session = UssdSession::where('session_id', $session_id)->first();
+                            $agent = Agent::find($session->agent_id);
+                            $amount = (float)$last_part;
 
-                            Log::info('Processing confirmed agent payment', [
-                                'session_id' => $session_id,
-                                'amount' => $session->amount
+                            // Validate amount
+                            if ($amount <= 0) {
+                                $message_string = "Invalid amount. Try again:\n0. Back\n*. Main Menu";
+                                break;
+                            }
+
+                            // Validate against float balance
+                            if ($amount > $agent->float_balance) {
+                                $message_string = "Amount exceeds float balance (K" .
+                                                number_format($agent->float_balance, 2) .
+                                                "). Try again:\n0. Back\n*. Main Menu";
+                                break;
+                            }
+
+                            // Store amount in session
+                            $this->updateSession($session_id, 7, 3, [
+                                'amount' => $amount,
+                                'transaction_data' => array_merge(
+                                    $session->transaction_data ?? [],
+                                    ['amount_validation_time' => now()->toIso8601String()]
+                                )
                             ]);
 
-                            $result = $this->processAgentPayment(
-                                $session->agent_id,
-                                $session->customer_id,
-                                $session->amount,
-                                $session->meter_number
-                            );
+                            // Show confirmation message
+                            $message_string = "Confirm payment:\n" .
+                                            "Amount: K" . number_format($amount, 2) . "\n" .
+                                            "Customer: " . $session->customer_name . "\n" .
+                                            "Meter: " . $session->meter_number . "\n\n" .
+                                            "1. Confirm\n2. Cancel\n0. Back\n*. Main Menu";
 
-                            if ($result['success']) {
-                                $message_string = "Payment Successful!\n" .
-                                                "Amount: K" . number_format($session->amount, 2) . "\n" .
-                                                "Token: " . $result['token'] . "\n" .
-                                                "Reference: " . $result['external_id'] .
-                                                "\n\n*. Main Menu";
+                        } catch (\Exception $e) {
+                            Log::error('Amount validation error', [
+                                'error' => $e->getMessage(),
+                                'session_id' => $session_id,
+                                'amount' => $last_part ?? null
+                            ]);
+                            $message_string = "Service error. Please try again.\n0. Back\n*. Main Menu";
+                        }
+                    }
+                    elseif ($step_no == 3 && is_numeric($last_part)) {
+                        if ($last_part == 1) {
+                            try {
+                                $session = UssdSession::where('session_id', $session_id)->first();
 
-                                // Get customer phone number for SMS
-                                $customer = Customer::find($session->customer_id);
-                                if ($customer) {
-                                    $this->sendSms(
-                                        $customer->phone_number,
-                                        "Your electricity token: " . $result['token'] .
-                                        "\nAmount: K" . number_format($session->amount, 2) .
-                                        "\nRef: " . $result['external_id']
+                                // Process payment through SparkMeter
+                                $result = $this->sparkMeter->processPayment(
+                                    $session->customer_code,
+                                    $session->amount,
+                                    "USSD Agent Sale - {$session->meter_number}"
+                                );
+
+                                if ($result['success']) {
+                                    // Deduct from agent float
+                                    $agent = Agent::find($session->agent_id);
+                                    $newBalance = $agent->float_balance - $session->amount;
+
+                                    $agent->update([
+                                        'float_balance' => $newBalance,
+                                        'last_transaction_at' => now()
+                                    ]);
+
+                                    // Create float transaction
+                                    FloatTransaction::create([
+                                        'agent_id' => $session->agent_id,
+                                        'amount' => $session->amount,
+                                        'type' => 'debit',
+                                        'reference_number' => $result['external_id'],
+                                        'payment_method' => 'ussd',
+                                        'status' => 'completed',
+                                        'description' => "Electricity sale via USSD",
+                                        'balance_before' => $agent->float_balance,
+                                        'balance_after' => $newBalance,
+                                        'processed_by' => $session->agent_id,
+                                        'processed_at' => now()
+                                    ]);
+
+                                    // Create payment record
+                                    Payment::create([
+                                        'agent_id' => $session->agent_id,
+                                        'amount_paid' => $session->amount,
+                                        'payment_reference_number' => $result['external_id'],
+                                        'payment_method' => 'Agent Float',
+                                        'payment_network' => 'Agent',
+                                        'payment_status' => 'completed',
+                                        'payment_status_id' => 1,
+                                        'route' => 'USSD',
+                                        'type' => 'Credit',
+                                        'transaction_id' => $result['transaction_id'],
+                                        'phone_number' => $session->customer_phone,
+                                        'meter_number' => $session->meter_number,
+                                        'processed_by' => $session->agent_id,
+                                        'remarks' => 'USSD Agent Sale'
+                                    ]);
+
+                                    // Success message
+                                    $message_string = "Payment Successful!\n" .
+                                                    "Amount: K" . number_format($session->amount, 2) . "\n" .
+                                                    "Token: " . ($result['token'] ?? 'Processing') . "\n" .
+                                                    "Ref: " . $result['external_id'] . "\n\n" .
+                                    "*. Main Menu";
+
+                                    // Send customer notification
+                                    if ($session->customer_phone) {
+                                        $this->sendSmsNotification(
+                                            "260" . ltrim($session->customer_phone, '+260'),
+                                            "Your electricity payment was successful.\n" .
+                                            "Amount: K" . number_format($session->amount, 2) . "\n" .
+                                            "Token: " . ($result['token'] ?? 'Processing') . "\n" .
+                                            "Ref: " . $result['external_id']
+                                        );
+                                    }
+
+                                    // Send agent notification
+                                    $this->sendSmsNotification(
+                                        "260" . ltrim($agent->agent_phone_number, '+260'),
+                                        "Sale successful!\n" .
+                                        "Amount: K" . number_format($session->amount, 2) . "\n" .
+                                        "New Float: K" . number_format($newBalance, 2) . "\n" .
+                                        "Ref: " . $result['external_id']
                                     );
-                                    $this->sendNotification($phone, $message_string);
+
+                                } else {
+                                    $message_string = "Payment failed: " . ($result['message'] ?? 'Unknown error') .
+                                                    "\n0. Back\n*. Main Menu";
                                 }
-                            } else {
-                                $message_string = "Payment failed: " . ($result['message'] ?? 'Unknown error') .
-                                                "\n0. Back\n*. Main Menu";
+                            } catch (\Exception $e) {
+                                Log::error('Payment processing error', [
+                                    'error' => $e->getMessage(),
+                                    'session_id' => $session_id,
+                                    'trace' => $e->getTraceAsString()
+                                ]);
+                                $message_string = "Payment failed. Please try again later.\n0. Back\n*. Main Menu";
                             }
                         } else {
                             $message_string = "Transaction cancelled.\n*. Main Menu";
                         }
                         $request_type = "3";
-                    } catch (\Exception $e) {
-                        Log::error('Payment confirmation error', [
-                            'error' => $e->getMessage(),
-                            'trace' => $e->getTraceAsString()
-                        ]);
-                        $message_string = "Payment failed. Please try again later.\n0. Back\n*. Main Menu";
-                        $request_type = "3";
                     }
-                }
-                break;
+                    break;
+
 
             case 8: // Buy Float
                 if ($step_no == 1 && is_numeric($last_part)) {
@@ -1322,22 +1485,22 @@ class UssdSessionController extends Controller
 
                         }
 
-            } catch (\Exception $e) {
-                Log::error('Unhandled exception in handleUssd', [
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                    'request' => [
-                        'session_id' => $request->SESSION_ID,
-                        'phone' => $request->MSISDN,
-                        'message' => $request->MESSAGE
-                    ]
-                ]);
+                } catch (\Exception $e) {
+                    Log::error('Unhandled exception in handleUssd', [
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString(),
+                        'request' => [
+                            'session_id' => $request->SESSION_ID,
+                            'phone' => $request->MSISDN,
+                            'message' => $request->MESSAGE
+                        ]
+                    ]);
 
-                return $this->formatResponse(
-                    "System error. Please try again.\n*. Main Menu",
-                    "3"
-                );
-            }
+                    return $this->formatResponse(
+                        "System error. Please try again.\n*. Main Menu",
+                        "3"
+                    );
+                }
         return $this->formatResponse($message_string, $request_type);
     }
 
@@ -1472,9 +1635,51 @@ class UssdSessionController extends Controller
         }
     }
 
+    private function createCustomerFeedback($phone, $sessionId, $description)
+    {
+        try {
+            Log::info('Creating customer feedback', [
+                'phone' => $phone,
+                'session_id' => $sessionId
+            ]);
+
+            $feedbackNumber = 'FB' . random_int(1000000, 9999999);
+
+            $feedback = CustomerFeedback::create([
+                'feedback_number' => $feedbackNumber,
+                'phone_number' => $phone,
+                'session_id' => $sessionId,
+                'communication_channel_id' => 1, // USSD channel ID
+                'description' => $description,
+                'status' => 'submitted',
+                'metadata' => [
+                    'source' => 'USSD',
+                    'created_via' => 'customer_ussd',
+                    'ip_address' => request()->ip()
+                ]
+            ]);
+
+            Log::info('Customer feedback created successfully', [
+                'feedback_id' => $feedback->id,
+                'reference' => $feedback->feedback_number
+            ]);
+
+            return $feedback;
+
+        } catch (\Exception $e) {
+            Log::error('Error processing feedback', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'phone' => $phone,
+                'session_id' => $sessionId
+            ]);
+            throw $e;
+        }
+    }
+
     private function getMainMenu()
     {
-        return "Welcome to REA\n1. Buy Electricity\n2. View Balance\n3. Query Transaction\n4. Customer Desk\n5. Agent Login\n*. Main Menu";
+        return "Welcome to REA\n1. Buy Electricity\n2. View Balance\n3. Query Transaction\n4. Customer Desk\n5. Agent Login";
     }
 
     private function processAgentPayment($agent_id, $customer_id, $amount, $meter_number)
@@ -1625,7 +1830,6 @@ class UssdSessionController extends Controller
         }
     }
 
-
     private function validateCustomer($customerCode)
     {
         try {
@@ -1744,15 +1948,15 @@ class UssdSessionController extends Controller
         ]);
     }
 
-    private function updateSession($session_id, $case_no, $step_no, $additional_data = [])
-    {
-        $update_data = array_merge([
-            "case_no" => $case_no,
-            "step_no" => $step_no
-        ], $additional_data);
+    // private function updateSession($session_id, $case_no, $step_no, $additional_data = [])
+    // {
+    //     $update_data = array_merge([
+    //         "case_no" => $case_no,
+    //         "step_no" => $step_no
+    //     ], $additional_data);
 
-        UssdSession::where('session_id', $session_id)->update($update_data);
-    }
+    //     UssdSession::where('session_id', $session_id)->update($update_data);
+    // }
 
     private function standardizePhoneNumber($phone)
     {
@@ -1941,7 +2145,6 @@ class UssdSessionController extends Controller
         }
     }
 
-
     private function sendSms($phone, $message)
     {
         // Implement SMS sending logic
@@ -2023,65 +2226,6 @@ class UssdSessionController extends Controller
         }
     }
 
-    // private function getCustomerDeskMenu($language)
-    // {
-    //     if ($language == 1) { //English
-    //         return "Please select one of the options\n\n" .
-    //             "1. Complaints\n" .
-    //             "2. General Inquiries\n" .
-    //             "3. Customer Feedback\n" .
-    //             "4. Track Complaints" .
-    //             "\n\n0. Back\n*. Main Menu";
-    //     } else { //Lunda
-    //         return "Sakulenuhu chuma chimu heshina\n\n" .
-    //             "1. Nyabu (Kudibilashana)\n" .
-    //             "2. Malwihu adi ezhima (Kwihula Mudimwezhima)\n" .
-    //             "3. Wunsahu kudi akakulanda kesi ka wuneñu (Kwakula Kwa Mukakuseshana)\n" .
-    //             "4. Mwatalishenu nyabu" .
-    //             "\n\n0. Back\n*. Main Menu";
-    //     }
-    // }
-
-    // private function getComplaintsMessage($language, $type)
-    // {
-    //     $messages = [
-    //         1 => [ // English
-    //             'METER_PROMPT' => "Please enter your Meter number\n0. Back\n*. Main Menu",
-    //             'TYPE_SELECTION' => "Please select the type of Complaint\n\n1. Power outage\n2. Billing\n3. Other\n\n0. Back\n*. Main Menu",
-    //             'SPECIFY' => "Please specify the complaint\n0. Back\n*. Main Menu",
-    //             'SUCCESS' => "Thank you for your report. Our team will look into the problem and update you.",
-    //             'ERROR' => "System error. Please try again later.\n0. Back\n*. Main Menu"
-    //         ],
-    //         2 => [ // Lunda
-    //             'METER_PROMPT' => "Mwani Iñizhenu nambala yenu ya mita\n0. Back\n*. Main Menu",
-    //             'TYPE_SELECTION' => "Mwani sakulenu muchidi wamwabu\n\n1. Kuya kwa kesi ka wuneñu hela malayiti\n2. Wuseya wa kesi ka wunengu hela malayiti\n3. Nyabu yikwawu\n\n0. Back\n*. Main Menu",
-    //             'SPECIFY' => "Mwani shimunenu mwabu wenu\n0. Back\n*. Main Menu",
-    //             'SUCCESS' => "Kusakililaku mwani hakushimuna, antu etu akutalahu ha kukala kweniku naku yilezha mwakwilila mwani",
-    //             'ERROR' => "Kukala mukachi ka computer. Mwani temukenu.\n0. Back\n*. Main Menu"
-    //         ]
-    //     ];
-
-    //     return $messages[$language][$type] ?? $messages[1]['ERROR'];
-    // }
-
-    // private function getFeedbackMessage($language, $type)
-    // {
-    //     if ($language == 1) {
-    //         return "Please enter your feedback\n0. Back\n*. Main Menu";
-    //     } else {
-    //         return "Wunsahu kudi akakulanda kesi ka wunengu\n0. Back\n*. Main Menu";
-    //     }
-    // }
-
-    // private function getTrackComplaintMessage($language, $type)
-    // {
-    //     if ($language == 1) {
-    //         return "Please enter your Complaint number\n0. Back\n*. Main Menu";
-    //     } else {
-    //         return "Mwani Iñizhenu nambala yenu ya nyabu\n0. Back\n*. Main Menu";
-    //     }
-    // }
-
     private function sendComplaintConfirmation($phone, $session_id, $language)
     {
         try {
@@ -2123,8 +2267,6 @@ class UssdSessionController extends Controller
             return false;
         }
     }
-
-
 
     // Updated getComplaintStatus method with detailed statuses
     private function getComplaintStatus($status_id, $language)
@@ -2174,47 +2316,4 @@ class UssdSessionController extends Controller
     }
 
 
-
-    // Update complaint confirmation method with logging:
-    // private function sendComplaintConfirmation($phone, $session_id, $language)
-    // {
-    //     try {
-    //         Log::info('Preparing Complaint Confirmation', [
-    //             'session_id' => $session_id,
-    //             'phone' => $phone,
-    //             'language' => $language
-    //         ]);
-
-    //         $complaint = Complaint::where('session_id', $session_id)->first();
-
-    //         if (!$complaint) {
-    //             Log::error('Complaint Not Found', [
-    //                 'session_id' => $session_id
-    //             ]);
-    //             throw new \Exception('Complaint not found for session: ' . $session_id);
-    //         }
-
-    //         Log::info('Found Complaint Record', [
-    //             'complaint_number' => $complaint->complaint_number,
-    //             'session_id' => $session_id
-    //         ]);
-
-    //         $sms_message = ($language == 1) ?
-    //             "Thank you for your report. Your complaint NUMBER is " . $complaint->complaint_number .
-    //             ". Our team will look into the problem and update you. For any queries, please call us on 211-241296" :
-    //             "Kusakililaku hakushimuna. Nambala ya mwabu wenu yinayi " . $complaint->complaint_number .
-    //             ". Antu etu akutalahu ha kukala kweniku naku yilezha mwakwilila mwani. Munateli kutwitumina nshinga ha 211-241296";
-
-    //         return $this->sendNotification($phone, $sms_message);
-
-    //         } catch (\Exception $e) {
-    //         Log::error('Error Sending Complaint Confirmation', [
-    //             'error' => $e->getMessage(),
-    //             'trace' => $e->getTraceAsString(),
-    //             'session_id' => $session_id,
-    //             'phone' => $phone
-    //         ]);
-    //         return false;
-    //     }
-    // }
 }
