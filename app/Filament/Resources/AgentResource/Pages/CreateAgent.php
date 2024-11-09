@@ -15,53 +15,81 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-
-function sendSmsNotification(string $message, string $phone_number): void
-
-{
-    // Send confirmation SMS
-    $url_encoded_message = urlencode($message);
-
-    $url = 'https://www.cloudservicezm.com/smsservice/httpapi?username=Blessmore&password=Blessmore&msg=' . $url_encoded_message . '.+&shortcode=2343&sender_id=GeePay Biz&phone=' . $phone_number . '&api_key=121231313213123123';
-
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Use this only if you have SSL verification issues
-    $response = curl_exec($ch);
-    curl_close($ch);
-}
-
-function generateMerchantCode()
-{
-    // Generate a random number between 1000 and 9999
-    $merchant_code= rand(100000, 999999);
-
-
-    // Check if the payment reference number already exists in the database
-    if (DB::table('agents')->where('merchant_code',$merchant_code)->exists()) {
-        // If the payment reference number already exists, generate a new one recursively
-        return generateMerchantCode();
-    }
-    return $merchant_code;
-}
+use Illuminate\Support\Str;
 
 class CreateAgent extends CreateRecord
 {
     protected static string $resource = AgentResource::class;
 
+    /**
+     * Send SMS notification
+     */
+    private function sendSmsNotification(string $message, string $phone_number): void
+    {
+        try {
+            Log::info('Sending SMS notification', [
+                'phone' => $phone_number,
+                'message' => $message
+            ]);
+
+            $url_encoded_message = urlencode($message);
+            $url = 'https://www.cloudservicezm.com/smsservice/httpapi?' .
+                   'username=Blessmore&password=Blessmore&msg=' . $url_encoded_message .
+                   '.+&shortcode=2343&sender_id=REA&phone=' . $phone_number .
+                   '&api_key=121231313213123123';
+
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            $response = curl_exec($ch);
+            $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($http_code !== 200) {
+                throw new \Exception("SMS API returned status code: $http_code");
+            }
+
+            Log::info('SMS sent successfully', [
+                'phone' => $phone_number,
+                'response' => $response
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('SMS sending failed', [
+                'error' => $e->getMessage(),
+                'phone' => $phone_number
+            ]);
+        }
+    }
+
+    /**
+     * Generate unique merchant code
+     */
+    private function generateMerchantCode(): string
+    {
+        do {
+            $merchant_code = 'REA' . now()->format('y') . rand(10000, 99999);
+        } while (DB::table('agents')->where('merchant_code', $merchant_code)->exists());
+
+        return $merchant_code;
+    }
+
     public function mount(): void
     {
-        $user = Auth::user();
-        //abort_unless(checkCreateBusinessesPermission() && (Auth::user()->role_id == 1 || Auth::user()->role_id == 2 || Auth::user()->role_id == 7), 403);
+        // Authorization check
+        abort_unless(
+            auth()->user()->can('create_agents') ||
+            in_array(auth()->user()->role_id, [1, 2, 7]),
+            403
+        );
 
-        $activity = AuditTrail::create([
-            "user_id" => $user->id,
-            "module" => "Businesses",
-            "activity" => "Viewed Create Businesses Page",
+        // Log page access
+        AuditTrail::create([
+            "user_id" => auth()->id(),
+            "module" => "Agents",
+            "activity" => "Accessed agent creation page",
             "ip_address" => request()->ip()
         ]);
-
-        $activity->save();
     }
 
     protected function getRedirectUrl(): string
@@ -71,62 +99,121 @@ class CreateAgent extends CreateRecord
 
     protected function mutateFormDataBeforeCreate(array $data): array
     {
-        $formatted_business_name = strtolower(str_replace(' ', '', $data['business_name']));
+        try {
+            Log::info('Processing agent creation data', [
+                'business_name' => $data['business_name'] ?? null
+            ]);
 
+            // Format business name
+            $formatted_business_name = Str::lower(Str::replace(' ', '', $data['business_name']));
 
-        //branch code
-        $bank_id = BankName::where('name', $data['business_bank_name'])->first()->id;
-        $branch_code = BankBranch::where('bank_name_id', $bank_id)->first()->branch_code ?? "";
+            // Get bank branch code
+            $bank_branch_code = null;
+            if (!empty($data['business_bank_name'])) {
+                $bank = BankName::where('name', $data['business_bank_name'])->first();
+                if ($bank) {
+                    $branch = BankBranch::where('bank_name_id', $bank->id)->first();
+                    $bank_branch_code = $branch?->branch_code;
+                }
+            }
 
-        $user_id = Auth::user()->id;
+            // Generate default PIN for USSD
+            $default_pin = rand(1000, 9999);
 
-        $data['user_id'] = $user_id;
-        $data['is_active'] = 0;
-        $data['business_bank_account_branch_code'] = $branch_code;
+            // Format phone numbers
+            $data['agent_phone_number'] = ltrim($data['agent_phone_number'] ?? '', '+260');
+            $data['personal_phone_number'] = ltrim($data['personal_phone_number'] ?? '', '+260');
+            $data['next_of_kin_number'] = ltrim($data['next_of_kin_number'] ?? '', '+260');
 
-        return $data;
+            // Merge data
+            return array_merge($data, [
+                'user_id' => auth()->id(),
+                'is_active' => false,
+                'status' => Agent::STATUS_PENDING,
+                'business_bank_account_branch_code' => $bank_branch_code,
+                'merchant_code' => $this->generateMerchantCode(),
+                'pin' => $default_pin,
+                'float_balance' => 0,
+                'float_limit' => $data['float_limit'] ?? 10000,
+                'operation_status' => 'pending',
+                'ussd_access_level' => 'basic',
+                'commission_rate' => $data['commission_rate'] ?? 2.50,
+            ]);
 
+        } catch (\Exception $e) {
+            Log::error('Error in agent data mutation', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
     }
 
-    protected function afterCreate()
+    protected function afterCreate(): void
     {
-        //log user activity
-        $activity = AuditTrail::create([
-            "user_id" => Auth::user()->id,
-            "module" => "Agents",
-            "activity" => "Created Agent record with ID ".$this->record->id,
-            "ip_address" => request()->ip()
-        ]);
+        $agent = $this->record;
 
-        $activity->save();
+        try {
+            // Log creation
+            AuditTrail::create([
+                "user_id" => auth()->id(),
+                "module" => "Agents",
+                "activity" => "Created agent {$agent->business_name} with ID {$agent->id}",
+                "ip_address" => request()->ip()
+            ]);
 
-        $password = "REA.1234";
+            // Default credentials
+            $password = "REA.1234";
+            $merchant_code = $agent->merchant_code;
 
-        $merchant_code = generateMerchantCode();
+            // Send SMS notification
+            $message = "Your REA Agent account has been created successfully.\n" .
+                      "Merchant Code: {$merchant_code}\n" .
+                      "Default PIN: {$agent->pin}\n" .
+                      "Password: {$password}\n" .
+                      "Your account will be activated after verification.";
 
-        $update_business = Agent::where('id', $this->record->id)->update([
-            "merchant_code" => $merchant_code
-        ]);
+            $this->sendSmsNotification(
+                $message,
+                "260" . $agent->agent_phone_number
+            );
 
-        $candidate_name = $this->data['business_name'];
-        $exploded_string  = explode(" ", $candidate_name);
+            // Send email if business email is provided
+            if (!empty($agent->business_email)) {
+                Mail::to($agent->business_email)->send(
+                    new WelcomeMail($password, $merchant_code)
+                );
+            }
 
-        //send email with credentials to the business email address
-        $account_number_to_send = $this->record->account_number;
-        $account_owner_to_send = $exploded_string[0];
-        $merchant_code_to_send = $merchant_code;
+            // Queue background tasks if needed
+            SendAccountMail::dispatch(
+                $password,
+                $merchant_code,
+                $agent->business_email
+            );
 
-       
+            Log::info('Agent created successfully', [
+                'agent_id' => $agent->id,
+                'merchant_code' => $merchant_code
+            ]);
 
-        $message = "Your REA Agent Merchant Code ID ".$merchant_code." has been created successfully. Use ".$password." as your temporal password to login after account activation";
+        } catch (\Exception $e) {
+            Log::error('Error in agent creation aftermath', [
+                'agent_id' => $agent->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+        }
+    }
 
-        sendSmsNotification($message, "260".$this->data['agent_phone_number']);
+    protected function getCreatedNotificationTitle(): ?string
+    {
+        return 'Agent created successfully';
+    }
 
-        Log::info($message);
-
-        //Mail::to($this->data['business_email'])->send(new WelcomeMail($password,$merchant_code_to_send));
-
-       // SendAccountMail::dispatch($password,$merchant_code_to_send,$this->data['business_email']);
-
+    protected function getCreatedNotificationContent(): ?string
+    {
+        $agent = $this->record;
+        return "Agent {$agent->business_name} has been created with merchant code {$agent->merchant_code}";
     }
 }

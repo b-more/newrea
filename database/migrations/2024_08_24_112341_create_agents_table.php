@@ -79,6 +79,32 @@ return new class extends Migration
             $table->timestamp('last_transaction_at')->nullable(); // Last transaction timestamp
             $table->decimal('daily_transaction_limit', 15, 2)->default(50000.00); // Daily transaction limit
             $table->json('transaction_summary')->nullable(); // Daily/weekly/monthly summaries
+            $table->timestamp('activated_at')->nullable();
+            $table->unsignedBigInteger('activated_by')->nullable();
+            $table->timestamp('suspended_at')->nullable();
+            $table->unsignedBigInteger('suspended_by')->nullable();
+            $table->string('suspension_reason')->nullable();
+            $table->timestamp('blacklisted_at')->nullable();
+            $table->unsignedBigInteger('blacklisted_by')->nullable();
+            $table->string('blacklist_reason')->nullable();
+            $table->timestamp('reactivated_at')->nullable();
+            $table->unsignedBigInteger('reactivated_by')->nullable();
+            $table->timestamp('deleted_at')->nullable();
+            $table->unsignedBigInteger('deleted_by')->nullable();
+            $table->string('deletion_reason')->nullable();
+
+            // Additional PIN management fields
+            $table->timestamp('pin_changed_at')->nullable();
+            $table->integer('pin_attempts')->default(0);
+            $table->timestamp('pin_locked_until')->nullable();
+
+            // Additional float management fields
+            $table->timestamp('float_limit_updated_at')->nullable();
+            $table->unsignedBigInteger('float_limit_updated_by')->nullable();
+
+            // Additional business fields
+            $table->string('dob')->nullable(); // Date of birth
+            $table->integer('status')->default(0); // For more detailed status tracking
 
             $table->timestamps();
 
