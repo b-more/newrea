@@ -26,82 +26,6 @@ use App\Services\SparkMeterService;
 
 class UssdSessionController extends Controller
 {
-    function generateConversationId()
-    {
-        $random = rand(100000000000000000, 999999999999999999);
-
-        // Check if the payment reference number already exists in the database
-        if (DB::table('payments')->where('payment_reference_number', $random)->exists()) {
-            // If the payment reference number already exists, generate a new one recursively
-            return $this->generateConversationId();
-        }
-
-        return $random;
-    }
-
-    //generate complaint number
-    function generateComplaintNumber()
-    {
-
-        $prefix = 'CN'; // Prefix for the complaint number
-
-        // Generate a random number between 1000000 and 9999999
-        $random = rand(1000000, 9999999); // 1000456
-
-        // Combine the prefix, random number, and suffix to form the account number
-        $raw_complaint_number = $prefix . $random;  // CN1000456
-
-        // Check if the payment reference number already exists in the database
-        if (DB::table('complaints')->where('complaint_number', $raw_complaint_number)->exists()) {
-            // If the payment reference number already exists, generate a new one recursively
-            return $this->generateComplaintNumber();
-        }
-
-        return $raw_complaint_number;
-    }
-
-    //generate inquiry number
-    function generateInquiryNumber()
-    {
-
-        $prefix = 'IN'; // Prefix for the inquiry number
-
-        // Generate a random number between 1000000 and 9999999
-        $random = rand(1000000, 9999999); // 1000456
-
-        // Combine the prefix, random number, and suffix to form the account number
-        $inquiry_number = $prefix . $random;  // CN1000456
-
-        // Check if the inquiry number already exists in the database
-        if (DB::table('general_inquiries')->where('inquiry_number', $inquiry_number)->exists()) {
-            // If the inquiry already exists, generate a new one recursively
-            return $this->generateInquiryNumber();
-        }
-
-        return $inquiry_number;
-    }
-
-    //generate feedback number
-    function generateFeedbackNumber()
-    {
-
-        $prefix = 'FB'; // Prefix for the inquiry number
-
-        // Generate a random number between 1000000 and 9999999
-        $random = rand(1000000, 9999999); // 1000456
-
-        // Combine the prefix, random number, and suffix to form the account number
-        $feedback_number = $prefix . $random;  // CN1000456
-
-        // Check if the inquiry number already exists in the database
-        if (DB::table('customer_feedbacks')->where('feedback_number', $feedback_number)->exists()) {
-            // If the inquiry already exists, generate a new one recursively
-            return $this->generateFeedbackNumber();
-        }
-
-        return $feedback_number;
-    }
-
     protected $sparkMeter;
 
     public function __construct(SparkMeterService $sparkMeter)
@@ -109,9 +33,53 @@ class UssdSessionController extends Controller
         $this->sparkMeter = $sparkMeter;
     }
 
+    const COMPLAINT_STATUSES = [
+        1 => [
+            'en' => 'Open/New',
+            'ln' => 'Wushili/Wahimpya'
+        ],
+        2 => [
+            'en' => 'Assigned to Technician',
+            'ln' => 'Chayinka kudi Technician'
+        ],
+        3 => [
+            'en' => 'Under Investigation',
+            'ln' => 'Chinatalishiwa'
+        ],
+        4 => [
+            'en' => 'Technician Dispatched',
+            'ln' => 'Technician nasendewa'
+        ],
+        5 => [
+            'en' => 'Awaiting Parts',
+            'ln' => 'Kulombela yuma yakuzatisha'
+        ],
+        6 => [
+            'en' => 'In Progress',
+            'ln' => 'Chinazatishiwa'
+        ],
+        7 => [
+            'en' => 'Resolved',
+            'ln' => 'Chamani'
+        ],
+        8 => [
+            'en' => 'Pending Customer Feedback',
+            'ln' => 'Kuindila kukula kudi akakulanda'
+        ],
+        9 => [
+            'en' => 'Closed',
+            'ln' => 'Chamana'
+        ],
+        10 => [
+            'en' => 'Reopened',
+            'ln' => 'Chanokihu choshi'
+        ]
+    ];
+
     public function handleUssd(Request $request)
     {
-        // Initialize variables
+        try {
+            // Initialize variables
         $message_string = "";
         $case_no = 1;
         $step_no = 1;
@@ -124,7 +92,29 @@ class UssdSessionController extends Controller
         $request_type = "2"; // Continue
 
         // Log USSD request
-        Log::info("USSD Request", ["raw" => $user_input]);
+        Log::info("USSD Request", [
+            "raw" => $user_input,
+            "last_part" => $last_part
+        ]);
+
+        // First, let's define detailed complaint statuses
+
+
+
+        // Handle main menu navigation first
+        // Check if input is just "*" (single asterisk)
+        if (trim($user_input) === "*") {
+            $this->updateSession($session_id, 1, 1);
+            $message_string = $this->getMainMenu();
+            return $this->formatResponse($message_string, $request_type);
+        }
+
+        // Handle main menu navigation from any step
+        if ($last_part === "" && substr($user_input, -1) === "*") {
+            $this->updateSession($session_id, 1, 1);
+            $message_string = $this->getMainMenu();
+            return $this->formatResponse($message_string, $request_type);
+        }
 
         // Check for existing session
         $getLastSessionInfo = UssdSession::where('phone_number', $phone)
@@ -140,569 +130,1215 @@ class UssdSessionController extends Controller
             $customer_id = $getLastSessionInfo->customer_id ?? null;
             $agent_id = $getLastSessionInfo->agent_id ?? null;
 
-        } else {
-            // Check for direct dial with merchant code and amount
-            if (count($lastPart) === 4) {
-                $merchant_code = $lastPart[2]; // Merchant code
-                $merchant_amount = $lastPart[3]; // Amount
-
-                // Validate merchant code
-                $agent = Agent::where('merchant_code', $merchant_code)
-                    ->where('is_active', true)
-                    ->first();
-
-                if ($agent) {
-                    Log::info("Direct dial payment initiated", [
-                        'merchant' => $merchant_code,
-                        'amount' => $merchant_amount
-                    ]);
-
-                    $message_string = "You are paying K".$merchant_amount." to ".$agent->business_name.
-                                    "\n1. Confirm\n2. Cancel";
-
-                    // Save session
-                    UssdSession::create([
-                        "phone_number" => $phone,
-                        "case_no" => 9, // Special case for direct dial
-                        "step_no" => 1,
-                        "session_id" => $session_id,
-                        "agent_id" => $agent->id,
-                        "merchant_amount" => $merchant_amount
-                    ]);
-
+            // Handle "0" for going back
+            if ($last_part === '0') {
+                // Go back one step
+                if ($step_no > 1) {
+                    $step_no--;
+                    $this->updateSession($session_id, $case_no, $step_no);
+                    $message_string = $this->getPreviousMenu($case_no, $step_no, $getLastSessionInfo);
                     return $this->formatResponse($message_string, $request_type);
-                } else {
-                    $message_string = "Invalid merchant code. Please try again.";
-                    return $this->formatResponse($message_string, "3");
+                } else if ($case_no != 1) {
+                    // If at first step of a case, go back to main menu
+                    $this->updateSession($session_id, 1, 1);
+                    $message_string = $this->getMainMenu();
+                    return $this->formatResponse($message_string, $request_type);
                 }
-            } else {
-                // Create new session for standard USSD journey
-                UssdSession::create([
-                    "phone_number" => $phone,
-                    "case_no" => 1,
-                    "step_no" => 1,
-                    "session_id" => $session_id
-                ]);
             }
+        } else {
+            // Create new session for standard USSD journey
+            UssdSession::create([
+                "phone_number" => $phone,
+                "case_no" => 1,
+                "step_no" => 1,
+                "session_id" => $session_id
+            ]);
         }
 
         // Main USSD flow logic
         switch ($case_no) {
             case 1: // Main Menu
                 if ($step_no == 1) {
-                    $message_string = "Welcome to REA\n1. Buy Electricity\n2. View Balance\n3. Query Transaction\n4. Customer Desk\n5. Agent Login";
+                    $message_string = $this->getMainMenu();
                     $this->updateSession($session_id, 1, 2);
                 } elseif ($step_no == 2 && is_numeric($last_part)) {
                     switch ($last_part) {
                         case 1:
-                            $message_string = "Enter your Customer ID:";
+                            $message_string = "Enter your Customer ID:\n0. Back\n*. Main Menu";
                             $this->updateSession($session_id, 2, 1);
                             break;
                         case 2:
-                            $message_string = "Enter your Customer ID:";
+                            $message_string = "Enter your Customer ID:\n0. Back\n*. Main Menu";
                             $this->updateSession($session_id, 3, 1);
                             break;
                         case 3:
-                            $message_string = "Enter Transaction ID:";
+                            $message_string = "Enter Transaction ID:\n0. Back\n*. Main Menu";
                             $this->updateSession($session_id, 4, 1);
                             break;
-                        case 4:
-                            $message_string = "Select Option:\n1. Report Blackout\n2. Report Fault\n3. General Inquiry";
-                            $this->updateSession($session_id, 5, 1);
+                        case 4: // Customer Desk - Start with Language Selection
+                            $geLanguages = Language::where('is_active', 1)->get();
+                            $language_menu = "Choose language / Sakulenu lizu\n\n";
+                            foreach ($geLanguages as $index => $language) {
+                                $language_menu .= ($index + 1) . ". " . $language->name . "\n";
+                            }
+                            $language_menu .= "\n0. Back\n*. Main Menu";
+                            $message_string = $language_menu;
+                            $this->updateSession($session_id, 11, 1); // New case number for language selection
                             break;
                         case 5:
                             if ($this->isWhitelistedAgent($phone)) {
-                                $message_string = "Enter your PIN:";
+                                $message_string = "Enter your PIN:\n0. Back\n*. Main Menu";
                                 $this->updateSession($session_id, 6, 1);
                             } else {
-                                $message_string = "Unauthorized access. Contact support.";
+                                $message_string = "Unauthorized access. Contact support.\n*. Main Menu";
                                 $request_type = "3";
-<<<<<<< HEAD
                                 $this->sendNotification($phone, $message_string);
-=======
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                             }
                             break;
                         default:
-                            $message_string = "Invalid option. Please try again.";
+                            $message_string = "Invalid option. Please try again.\n*. Main Menu";
                     }
                 }
                 break;
 
-                case 2: // Buy Electricity Flow
-                    if ($step_no == 1) {
+            case 2: // Buy Electricity Flow
+                if ($step_no == 1) {
+                    $customer = $this->validateCustomer($last_part);
+                    if ($customer) {
+                        // Default test amount
+                        $amount = 100;
+
+                        $result = $this->sparkMeter->processPayment(
+                            $customer->customer_number,
+                            $amount,
+                            "USSD Electricity Purchase"
+                        );
+
+                        if ($result['success']) {
+                            $payment = Payment::create([
+                                'phone_number' => $phone,
+                                'meter_number' => $customer->meter_number,
+                                'customer_id' => $customer->id,
+                                'amount_paid' => $result['amount'],
+                                'payment_status_id' => 1,
+                                'payment_reference_number' => $result['external_id'],
+                                'transaction_id' => $result['transaction_id']
+                            ]);
+
+                            $message_string = "Payment Successful!\n" .
+                                            "Amount: " . $result['currency'] . " " . $result['amount'] . "\n" .
+                                            "Reference: " . $result['external_id'] . "\n" .
+                                            "Status: " . ucfirst($result['status']) . "\n\n*. Main Menu";
+
+                            $this->sendNotification($phone, $message_string);
+                        } else {
+                            $message_string = $result['message'] . "\n0. Back\n*. Main Menu";
+                            $this->sendNotification($phone, $message_string);
+                        }
+                        $request_type = "3";
+                    } else {
+                        $message_string = "Invalid customer code. Try again:\n0. Back\n*. Main Menu";
+                    }
+                }
+                break;
+
+            case 3: // View Balance
+                if ($step_no == 1) {
+                    try {
+                        Log::info('Processing balance check request', [
+                            'input' => $last_part
+                        ]);
+
                         $customer = $this->validateCustomer($last_part);
                         if ($customer) {
-<<<<<<< HEAD
-                            // Default test amount
-                            $amount = 100;
+                            $balanceCheck = $this->checkCustomerBalance($customer->customer_number);
 
-                            $result = $this->sparkMeter->processPayment(
-                                $customer->customer_number,
-                                $amount,
-                                "USSD Electricity Purchase"
-                            );
+                            if ($balanceCheck['success']) {
+                                $message_string = "Customer: " . $customer->name .
+                                                "\nMeter: " . $customer->meter_number .
+                                                "\nBalance: " . $balanceCheck['currency'] . " " .
+                                                $balanceCheck['balance'] .
+                                                "\n\n*. Main Menu";
 
-                            if ($result['success']) {
-                                // Save payment record
-                                $payment = Payment::create([
-                                    'phone_number' => $phone,
-                                    'meter_number' => $customer->meter_number,
-                                    'customer_id' => $customer->id,
-                                    'amount_paid' => $result['amount'],
-                                    'payment_status_id' => 1,
-                                    'payment_reference_number' => $result['external_id'],
-                                    'transaction_id' => $result['transaction_id']
-                                ]);
-
-                                $message_string = "Payment Successful!\n" .
-                                                "Amount: " . $result['currency'] . " " . $result['amount'] . "\n" .
-                                                "Reference: " . $result['external_id'] . "\n" .
-                                                "Status: " . ucfirst($result['status']);
-
-                                // Send SMS
                                 $this->sendNotification($phone, $message_string);
                             } else {
-                                $message_string = $result['message'];
-                                $this->sendNotification($phone, $message_string);
+                                $message_string = "Failed to check balance. Please try again later.\n0. Back\n*. Main Menu";
                             }
                             $request_type = "3";
                         } else {
-                            $message_string = "Invalid customer code. Try again:";
+                            $message_string = "Invalid customer code. Try again:\n0. Back\n*. Main Menu";
                         }
-=======
-                            $message_string = "Customer: " . $customer->name .
-                                            "\nMeter: " . $customer->meter_number .
-                                            "\nEnter amount:";
-
-                            $this->updateSession($session_id, 2, 2, [
-                                'customer_id' => $customer->id,
-                                'meter_number' => $customer->meter_number,
-                                'customer_number' => $customer->customer_number
-                            ]);
-                        } else {
-                            $message_string = "Invalid customer code. Try again:";
-                        }
-                    } elseif ($step_no == 2 && is_numeric($last_part)) {
-                        if ($last_part <= 0) {
-                            $message_string = "Invalid amount. Try again:";
-                        } else {
-                            $session = UssdSession::where('session_id', $session_id)->first();
-
-                            // Call the payment function which handles Zamtel integration
-                            $result = $this->payment(
-                                $phone,
-                                $last_part,
-                                $session->meter_number,
-                                $session->customer_id
-                            );
-
-                            if ($result) {
-                                $message_string = "Please enter your Zamtel Money PIN to complete the transaction of K" .
-                                                number_format($last_part, 2) .
-                                                " for electricity purchase.";
-                            } else {
-                                $message_string = "Payment initiation failed. Please try again later.";
-                            }
-                            $request_type = "3";
-                        }
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
+                    } catch (\Exception $e) {
+                        Log::error('Balance check error', [
+                            'error' => $e->getMessage()
+                        ]);
+                        $message_string = "Service temporarily unavailable. Please try again later.\n0. Back\n*. Main Menu";
+                        $request_type = "3";
                     }
-                    break;
+                }
+                break;
 
-                    case 3: // View Balance
-                        if ($step_no == 1) {
-                            try {
-                                Log::info('Processing balance check request', [
-                                    'input' => $last_part
-                                ]);
+            case 4: // Query Transaction
+                if ($step_no == 1) {
+                    $payment = Payment::where('payment_reference_number', $last_part)->first();
 
-                                $customer = $this->validateCustomer($last_part);
-                                if ($customer) {
-                                    $balanceCheck = $this->checkCustomerBalance($customer->customer_number);
+                    if ($payment) {
+                        $message_string = "Transaction Details:\n" .
+                                        "Amount: K" . number_format($payment->amount_paid, 2) . "\n" .
+                                        "Reference: " . $payment->payment_reference_number . "\n" .
+                                        "Date: " . $payment->created_at->format('Y-m-d H:i:s') . "\n" .
+                                        "Status: Success\n" .
+                                        "Meter: " . $payment->meter_number .
+                                        "\n\n*. Main Menu";
+                        $this->sendNotification($phone, $message_string);
+                    } else {
+                        $message_string = "Transaction not found\n0. Back\n*. Main Menu";
+                    }
+                    $request_type = "3";
+                }
+                break;
 
-                                    if ($balanceCheck['success']) {
-                                        $message_string = "Customer: " . $customer->name .
-                                                        "\nMeter: " . $customer->meter_number .
-                                                        "\nBalance: " . $balanceCheck['currency'] . " " .
-                                                        $balanceCheck['balance'];
-
-                                        // Send balance via SMS
-<<<<<<< HEAD
-                                        $this->sendNotification($phone, $message_string);
-=======
-                                        $this->sendSms($phone,
-                                            "Your electricity balance is " .
-                                            $balanceCheck['currency'] . " " .
-                                            $balanceCheck['balance']
-                                        );
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-                                    } else {
-                                        $message_string = "Failed to check balance. Please try again later.";
-                                    }
-                                    $request_type = "3";
-                                } else {
-                                    $message_string = "Invalid customer code. Try again:";
-                                }
-                            } catch (\Exception $e) {
-                                Log::error('Balance check error', [
-                                    'error' => $e->getMessage()
-                                ]);
-                                $message_string = "Service temporarily unavailable. Please try again later.";
-                                $request_type = "3";
-                            }
-                        }
-                        break;
-                        case 4: // Query Transaction
-                            if ($step_no == 1) {
-                                $payment = Payment::where('payment_reference_number', $last_part)->first();
-
-                                if ($payment) {
-                                    $message_string = "Transaction Details:\n" .
-                                                    "Amount: K" . number_format($payment->amount_paid, 2) . "\n" .
-                                                    "Reference: " . $payment->payment_reference_number . "\n" .
-                                                    "Date: " . $payment->created_at->format('Y-m-d H:i:s') . "\n" .
-                                                    "Status: Success\n" .
-                                                    "Meter: " . $payment->meter_number;
-<<<<<<< HEAD
-                                                    $this->sendNotification($phone, $message_string);
-
-=======
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-                                } else {
-                                    $message_string = "Transaction not found";
-                                }
-                                $request_type = "3";
-                            }
+            case 5: // Customer Desk
+                if ($step_no == 1 && is_numeric($last_part)) {
+                    switch ($last_part) {
+                        case 1: // Report Blackout
+                            $message_string = "Enter your meter number:\n0. Back\n*. Main Menu";
+                            $this->updateSession($session_id, 5, 2);
                             break;
-
+                        case 2: // Report Fault
+                            $message_string = "Enter your meter number:\n0. Back\n*. Main Menu";
+                            $this->updateSession($session_id, 5, 3);
+                            break;
+                        case 3: // General Inquiry
+                            $message_string = "Type your inquiry:\n0. Back\n*. Main Menu";
+                            $this->updateSession($session_id, 5, 4);
+                            break;
+                        default:
+                            $message_string = "Invalid option\n0. Back\n*. Main Menu";
+                    }
+                } elseif ($step_no == 2) { // Blackout Report
+                    $meter = $this->validateMeterNumber($last_part);
+                    if ($meter) {
+                        $complaint_number = $this->generateComplaintNumber();
+                        Complaint::create([
+                            'complaint_number' => $complaint_number,
+                            'type' => 'blackout',
+                            'meter_number' => $last_part,
+                            'customer_id' => $meter->customer_id,
+                            'status' => 'pending'
+                        ]);
+                        $message_string = "Blackout report submitted successfully.\n" .
+                                        "Reference: " . $complaint_number .
+                                        "\n\n*. Main Menu";
+                        $this->sendNotification($phone, "Your blackout report has been received. Reference: " . $complaint_number);
+                        $request_type = "3";
+                    } else {
+                        $message_string = "Invalid meter number. Try again:\n0. Back\n*. Main Menu";
+                    }
+                } elseif ($step_no == 3) { // Fault Report
+                    $meter = $this->validateMeterNumber($last_part);
+                    if ($meter) {
+                        $message_string = "Select fault type:\n" .
+                                        "1. No Power\n" .
+                                        "2. Meter Error\n" .
+                                        "3. Connection Issue\n" .
+                                        "4. Other\n" .
+                                        "0. Back\n*. Main Menu";
+                        $this->updateSession($session_id, 5, 5, ['meter_number' => $last_part]);
+                    } else {
+                        $message_string = "Invalid meter number. Try again:\n0. Back\n*. Main Menu";
+                    }
+                } elseif ($step_no == 4) { // General Inquiry
+                    $inquiry_number = $this->generateInquiryNumber();
+                    GeneralInquiry::create([
+                        'inquiry_number' => $inquiry_number,
+                        'phone_number' => $phone,
+                        'message' => $last_part,
+                        'status' => 'pending'
+                    ]);
+                    $message_string = "Inquiry submitted successfully.\n" .
+                                    "Reference: " . $inquiry_number .
+                                    "\n\n*. Main Menu";
+                    $this->sendNotification($phone, "Your inquiry has been received. Reference: " . $inquiry_number);
+                    $request_type = "3";
+                } elseif ($step_no == 5 && is_numeric($last_part)) { // Fault Type Selection
+                    $session = UssdSession::where('session_id', $session_id)->first();
+                    $fault_types = ['No Power', 'Meter Error', 'Connection Issue', 'Other'];
+                    if ($last_part >= 1 && $last_part <= 4) {
+                        $complaint_number = $this->generateComplaintNumber();
+                        Complaint::create([
+                            'complaint_number' => $complaint_number,
+                            'type' => 'fault',
+                            'meter_number' => $session->meter_number,
+                            'fault_type' => $fault_types[$last_part - 1],
+                            'status' => 'pending'
+                        ]);
+                        $message_string = "Fault report submitted successfully.\n" .
+                                        "Reference: " . $complaint_number .
+                                        "\n\n*. Main Menu";
+                        $this->sendNotification($phone, "Your fault report has been received. Reference: " . $complaint_number);
+                        $request_type = "3";
+                    } else {
+                        $message_string = "Invalid option. Try again:\n0. Back\n*. Main Menu";
+                    }
+                }
+                break;
 
             case 6: // Agent Login Flow
                 if ($step_no == 1) {
                     $agent = $this->validateAgentPin($phone, $last_part);
                     if ($agent) {
                         $message_string = "Welcome " . $agent->business_name .
-<<<<<<< HEAD
-                                        "\n1. Sell Electricity\n2. Check Float\n3. Buy \n4. Change PIN";
-=======
-                                        "\n1. Sell Electricity\n2. Check Float\n3. Buy Float";
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
+                                        "\n1. Sell Electricity" .
+                                        "\n2. Check Float" .
+                                        "\n3. Buy Float" .
+                                        "\n4. Change PIN" .
+                                        "\n0. Back\n*. Main Menu";
                         $this->updateSession($session_id, 6, 2, ['agent_id' => $agent->id]);
-
-                        // Log successful login
                         $this->logAgentActivity($agent->id, 'login', 'success');
                     } else {
-                        $message_string = "Invalid PIN. Try again:";
+                        $message_string = "Invalid PIN. Try again:\n0. Back\n*. Main Menu";
                         $this->logAgentActivity(null, 'login', 'failed');
-<<<<<<< HEAD
                         $this->sendNotification($phone, $message_string);
-=======
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                     }
                 } elseif ($step_no == 2 && is_numeric($last_part)) {
                     switch ($last_part) {
                         case 1: // Sell Electricity
-                            $message_string = "Enter customer code:";
+                            $message_string = "Enter customer code:\n0. Back\n*. Main Menu";
                             $this->updateSession($session_id, 7, 1);
                             break;
                         case 2: // Check Float
                             $session = UssdSession::where('session_id', $session_id)->first();
                             $agent = Agent::find($session->agent_id);
-                            $message_string = "Your float balance: K" . number_format($agent->float_balance, 2);
+                            $message_string = "Your float balance: K" . number_format($agent->float_balance, 2) .
+                                            "\n\n0. Back\n*. Main Menu";
                             $request_type = "3";
                             break;
                         case 3: // Buy Float
-                            $message_string = "Enter amount to purchase:";
+                            $message_string = "Enter amount to purchase:\n0. Back\n*. Main Menu";
                             $this->updateSession($session_id, 8, 1);
                             break;
-<<<<<<< HEAD
                         case 4: // Change PIN
-                            $message_string = "Enter your current PIN:";
-                            $this->updateSession($session_id, 10, 1); // New case 10 for PIN change flow
+                            $message_string = "Enter your current PIN:\n0. Back\n*. Main Menu";
+                            $this->updateSession($session_id, 10, 1);
                             break;
-=======
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                         default:
-                            $message_string = "Invalid option. Try again.";
+                            $message_string = "Invalid option. Try again:\n0. Back\n*. Main Menu";
                     }
                 }
                 break;
-                case 7: // Agent Electricity Sale
-                    if ($step_no == 1) {
-                        try {
-                            Log::info('Processing customer validation for agent sale', [
-                                'input' => $last_part
-                            ]);
 
-                            $customer = $this->validateCustomer($last_part);
-                            if ($customer) {
-                                $session = UssdSession::where('session_id', $session_id)->first();
-                                $agent = Agent::find($session->agent_id);
+            case 7: // Agent Electricity Sale
+                if ($step_no == 1) {
+                    try {
+                        Log::info('Processing customer validation for agent sale', [
+                            'input' => $last_part
+                        ]);
 
-                                if (!$agent) {
-                                    throw new \Exception('Agent not found');
-                                }
-
-                                // Verify agent has sufficient float
-                                if ($agent->float_balance <= 0) {
-                                    $message_string = "Insufficient float balance. Please top up first.";
-                                    $request_type = "3";
-<<<<<<< HEAD
-                                    $this->sendNotification($phone, $message_string);
-=======
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-                                    break;
-                                }
-
-                                Log::info('Customer validated for agent sale', [
-                                    'customer_id' => $customer->id,
-                                    'agent_id' => $agent->id
-                                ]);
-
-                                $message_string = "Customer: " . $customer->name .
-                                                "\nMeter: " . $customer->meter_number .
-                                                "\nAgent Float: K" . number_format($agent->float_balance, 2) .
-                                                "\n\nEnter amount:";
-
-                                $this->updateSession($session_id, 7, 2, [
-                                    'customer_id' => $customer->id,
-                                    'meter_number' => $customer->meter_number,
-                                    'customer_number' => $customer->customer_number
-                                ]);
-                            } else {
-                                $message_string = "Invalid customer code. Try again:";
-                            }
-                        } catch (\Exception $e) {
-                            Log::error('Agent sale error', [
-                                'error' => $e->getMessage(),
-                                'trace' => $e->getTraceAsString()
-                            ]);
-                            $message_string = "Service error. Please try again.";
-                            $request_type = "3";
-                        }
-                    } elseif ($step_no == 2 && is_numeric($last_part)) {
-                        try {
+                        $customer = $this->validateCustomer($last_part);
+                        if ($customer) {
                             $session = UssdSession::where('session_id', $session_id)->first();
                             $agent = Agent::find($session->agent_id);
 
-                            if ($last_part <= 0) {
-                                $message_string = "Invalid amount. Try again:";
-                                break;
+                            if (!$agent) {
+                                throw new \Exception('Agent not found');
                             }
 
-                            if ($last_part > $agent->float_balance) {
-                                $message_string = "Amount exceeds float balance (K" .
-                                                number_format($agent->float_balance, 2) .
-                                                "). Try again:";
-<<<<<<< HEAD
+                            if ($agent->float_balance <= 0) {
+                                $message_string = "Insufficient float balance. Please top up first.\n0. Back\n*. Main Menu";
+                                $request_type = "3";
                                 $this->sendNotification($phone, $message_string);
-=======
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                                 break;
                             }
 
-                            Log::info('Amount validation passed for agent sale', [
-                                'amount' => $last_part,
+                            Log::info('Customer validated for agent sale', [
+                                'customer_id' => $customer->id,
                                 'agent_id' => $agent->id
                             ]);
 
-                            $this->updateSession($session_id, 7, 3, ['amount' => $last_part]);
-                            $message_string = "Confirm purchase:\nAmount: K" . number_format($last_part, 2) .
-                                            "\n1. Confirm\n2. Cancel";
+                            $message_string = "Customer: " . $customer->name .
+                                            "\nMeter: " . $customer->meter_number .
+                                            "\nAgent Float: K" . number_format($agent->float_balance, 2) .
+                                            "\n\nEnter amount:\n0. Back\n*. Main Menu";
 
-                        } catch (\Exception $e) {
-                            Log::error('Amount validation error', ['error' => $e->getMessage()]);
-                            $message_string = "Service error. Please try again.";
-                            $request_type = "3";
+                            $this->updateSession($session_id, 7, 2, [
+                                'customer_id' => $customer->id,
+                                'meter_number' => $customer->meter_number,
+                                'customer_number' => $customer->customer_number
+                            ]);
+                        } else {
+                            $message_string = "Invalid customer code. Try again:\n0. Back\n*. Main Menu";
                         }
-                    } elseif ($step_no == 3 && is_numeric($last_part)) {
-                        try {
-                            if ($last_part == 1) {
-                                $session = UssdSession::where('session_id', $session_id)->first();
+                    } catch (\Exception $e) {
+                        Log::error('Agent sale error', [
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                        $message_string = "Service error. Please try again.\n0. Back\n*. Main Menu";
+                        $request_type = "3";
+                    }
+                } elseif ($step_no == 2 && is_numeric($last_part)) {
+                    try {
+                        $session = UssdSession::where('session_id', $session_id)->first();
+                        $agent = Agent::find($session->agent_id);
 
-                                Log::info('Processing confirmed agent payment', [
-                                    'session_id' => $session_id,
-                                    'amount' => $session->amount
-                                ]);
+                        if ($last_part <= 0) {
+                            $message_string = "Invalid amount. Try again:\n0. Back\n*. Main Menu";
+                            break;
+                        }
 
-                                $result = $this->processAgentPayment(
-                                    $session->agent_id,
-                                    $session->customer_id,
-                                    $session->amount,
-                                    $session->meter_number
-                                );
+                        if ($last_part > $agent->float_balance) {
+                            $message_string = "Amount exceeds float balance (K" .
+                                            number_format($agent->float_balance, 2) .
+                                            "). Try again:\n0. Back\n*. Main Menu";
+                            $this->sendNotification($phone, $message_string);
+                            break;
+                        }
 
-                                if ($result['success']) {
-                                    $message_string = "Payment Successful!\n" .
-                                                    "Amount: K" . number_format($session->amount, 2) . "\n" .
-                                                    "Token: " . $result['token'] . "\n" .
-                                                    "Reference: " . $result['external_id'];
+                        Log::info('Amount validation passed for agent sale', [
+                            'amount' => $last_part,
+                            'agent_id' => $agent->id
+                        ]);
 
-                                    // Get customer phone number for SMS
-                                    $customer = Customer::find($session->customer_id);
-                                    if ($customer) {
-                                        $this->sendSms(
-                                            $customer->phone_number,
-<<<<<<< HEAD
-                                           $message_string = "Your electricity token: " . $result['token'] .
-                                            "\nAmount: K" . number_format($session->amount, 2) .
-                                            "\nRef: " . $result['external_id']
-                                        );
-                                        $this->sendNotification($phone, $message_string);
-=======
-                                            "Your electricity token: " . $result['token'] .
-                                            "\nAmount: K" . number_format($session->amount, 2) .
-                                            "\nRef: " . $result['external_id']
-                                        );
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-                                    }
-                                } else {
-                                    $message_string = "Payment failed: " . ($result['message'] ?? 'Unknown error');
+                        $this->updateSession($session_id, 7, 3, ['amount' => $last_part]);
+                        $message_string = "Confirm purchase:\n" .
+                                        "Amount: K" . number_format($last_part, 2) .
+                                        "\n1. Confirm\n2. Cancel\n0. Back\n*. Main Menu";
+
+                    } catch (\Exception $e) {
+                        Log::error('Amount validation error', ['error' => $e->getMessage()]);
+                        $message_string = "Service error. Please try again.\n0. Back\n*. Main Menu";
+                        $request_type = "3";
+                    }
+                } elseif ($step_no == 3 && is_numeric($last_part)) {
+                    try {
+                        if ($last_part == 1) {
+                            $session = UssdSession::where('session_id', $session_id)->first();
+
+                            Log::info('Processing confirmed agent payment', [
+                                'session_id' => $session_id,
+                                'amount' => $session->amount
+                            ]);
+
+                            $result = $this->processAgentPayment(
+                                $session->agent_id,
+                                $session->customer_id,
+                                $session->amount,
+                                $session->meter_number
+                            );
+
+                            if ($result['success']) {
+                                $message_string = "Payment Successful!\n" .
+                                                "Amount: K" . number_format($session->amount, 2) . "\n" .
+                                                "Token: " . $result['token'] . "\n" .
+                                                "Reference: " . $result['external_id'] .
+                                                "\n\n*. Main Menu";
+
+                                // Get customer phone number for SMS
+                                $customer = Customer::find($session->customer_id);
+                                if ($customer) {
+                                    $this->sendSms(
+                                        $customer->phone_number,
+                                        "Your electricity token: " . $result['token'] .
+                                        "\nAmount: K" . number_format($session->amount, 2) .
+                                        "\nRef: " . $result['external_id']
+                                    );
+                                    $this->sendNotification($phone, $message_string);
                                 }
                             } else {
-                                $message_string = "Transaction cancelled.";
+                                $message_string = "Payment failed: " . ($result['message'] ?? 'Unknown error') .
+                                                "\n0. Back\n*. Main Menu";
+                            }
+                        } else {
+                            $message_string = "Transaction cancelled.\n*. Main Menu";
+                        }
+                        $request_type = "3";
+                    } catch (\Exception $e) {
+                        Log::error('Payment confirmation error', [
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                        $message_string = "Payment failed. Please try again later.\n0. Back\n*. Main Menu";
+                        $request_type = "3";
+                    }
+                }
+                break;
+
+            case 8: // Buy Float
+                if ($step_no == 1 && is_numeric($last_part)) {
+                    if ($last_part <= 0) {
+                        $message_string = "Invalid amount. Try again:\n0. Back\n*. Main Menu";
+                    } else {
+                        $message_string = "Confirm float purchase of K" . number_format($last_part, 2) .
+                                        "\n1. Confirm\n2. Cancel\n0. Back\n*. Main Menu";
+                        $this->updateSession($session_id, 8, 2, ['amount' => $last_part]);
+                    }
+                } elseif ($step_no == 2 && is_numeric($last_part)) {
+                    if ($last_part == 1) {
+                        // Process float purchase
+                        $session = UssdSession::where('session_id', $session_id)->first();
+                        $message_string = "Float purchase of K" . number_format($session->amount, 2) .
+                                        " initiated. You will receive an SMS confirmation.\n*. Main Menu";
+                        $this->sendNotification($phone, $message_string);
+                    } else {
+                        $message_string = "Float purchase cancelled.\n*. Main Menu";
+                    }
+                    $request_type = "3";
+                }
+                break;
+                case 9: // Direct Dial Flow
+                    if ($step_no == 1 && is_numeric($last_part)) {
+                        if ($last_part == 1) {
+                            $message_string = "Enter meter number:";
+                            $this->updateSession($session_id, 9, 2);
+                        } else {
+                            $message_string = "Transaction cancelled.";
+                            $request_type = "3";
+                        }
+                    } elseif ($step_no == 2) {
+                        $customer = $this->validateMeterNumber($last_part);
+                        if ($customer) {
+                            $message_string = "Confirm payment of K" . $getLastSessionInfo->merchant_amount .
+                                            " for meter " . $last_part . "\n1. Confirm\n2. Cancel";
+                            $this->updateSession($session_id, 9, 3, [
+                                'meter_no' => $last_part,
+                                'customer_id' => $customer->id
+                            ]);
+                        } else {
+                            $message_string = "Invalid meter number. Try again:";
+                        }
+                    } elseif ($step_no == 3 && is_numeric($last_part)) {
+                        if ($last_part == 1) {
+                            $result = $this->processAgentPayment(
+                                $getLastSessionInfo->agent_id,
+                                $getLastSessionInfo->customer_id,
+                                $getLastSessionInfo->merchant_amount
+                            );
+
+                            if ($result['success']) {
+                                $message_string = "Payment successful\nToken: " . $result['token'];
+                                $this->sendSms($phone, "Payment successful. Token: " . $result['token']);
+                                $this->sendNotification($phone, $message_string);
+                            } else {
+                                $message_string = "Payment failed: " . $result['message'];
+                                $this->sendNotification($phone, $message_string);
                             }
                             $request_type = "3";
-                        } catch (\Exception $e) {
-                            Log::error('Payment confirmation error', [
-                                'error' => $e->getMessage(),
-                                'trace' => $e->getTraceAsString()
-                            ]);
-                            $message_string = "Payment failed. Please try again later.";
+                        } else {
+                            $message_string = "Transaction cancelled.";
+                            $this->sendNotification($phone, $message_string);
                             $request_type = "3";
                         }
                     }
                     break;
-
-                case 9: // Direct Dial Flow
-                if ($step_no == 1 && is_numeric($last_part)) {
-                    if ($last_part == 1) {
-                        $message_string = "Enter meter number:";
-                        $this->updateSession($session_id, 9, 2);
-                    } else {
-                        $message_string = "Transaction cancelled.";
-                        $request_type = "3";
-                    }
-                } elseif ($step_no == 2) {
-                    $customer = $this->validateMeterNumber($last_part);
-                    if ($customer) {
-                        $message_string = "Confirm payment of K" . $getLastSessionInfo->merchant_amount .
-                                        " for meter " . $last_part . "\n1. Confirm\n2. Cancel";
-                        $this->updateSession($session_id, 9, 3, [
-                            'meter_no' => $last_part,
-                            'customer_id' => $customer->id
-                        ]);
-                    } else {
-                        $message_string = "Invalid meter number. Try again:";
-                    }
-                } elseif ($step_no == 3 && is_numeric($last_part)) {
-                    if ($last_part == 1) {
-                        $result = $this->processAgentPayment(
-                            $getLastSessionInfo->agent_id,
-                            $getLastSessionInfo->customer_id,
-                            $getLastSessionInfo->merchant_amount
-                        );
-
-                        if ($result['success']) {
-                            $message_string = "Payment successful\nToken: " . $result['token'];
-                            $this->sendSms($phone, "Payment successful. Token: " . $result['token']);
-<<<<<<< HEAD
-                            $this->sendNotification($phone, $message_string);
-                        } else {
-                            $message_string = "Payment failed: " . $result['message'];
-                            $this->sendNotification($phone, $message_string);
-=======
-                        } else {
-                            $message_string = "Payment failed: " . $result['message'];
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-                        }
-                        $request_type = "3";
-                    } else {
-                        $message_string = "Transaction cancelled.";
-<<<<<<< HEAD
-                        $this->sendNotification($phone, $message_string);
-=======
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-                        $request_type = "3";
-                    }
-                }
-                break;
-<<<<<<< HEAD
-
-            // Add new case for PIN change flow
             case 10: // PIN Change Flow
                 if ($step_no == 1) {
-                    // Validate current PIN
                     $session = UssdSession::where('session_id', $session_id)->first();
                     $agent = Agent::find($session->agent_id);
 
                     if ($agent && $this->validateAgentPin($phone, $last_part)) {
-                        $message_string = "Enter new PIN (4 digits):";
+                        $message_string = "Enter new PIN (4 digits):\n0. Back\n*. Main Menu";
                         $this->updateSession($session_id, 10, 2);
                     } else {
-                        $message_string = "Current PIN is incorrect. Try again:";
+                        $message_string = "Current PIN is incorrect. Try again:\n0. Back\n*. Main Menu";
                     }
-                }
-                elseif ($step_no == 2) {
-                    // Validate new PIN format
+                } elseif ($step_no == 2) {
                     if (strlen($last_part) === 4 && is_numeric($last_part)) {
-                        $message_string = "Confirm new PIN:";
+                        $message_string = "Confirm new PIN:\n0. Back\n*. Main Menu";
                         $this->updateSession($session_id, 10, 3, ['new_pin' => $last_part]);
                     } else {
-                        $message_string = "PIN must be 4 digits. Try again:";
+                        $message_string = "PIN must be 4 digits. Try again:\n0. Back\n*. Main Menu";
                     }
-                }
-                elseif ($step_no == 3) {
-                    // Confirm new PIN matches
+                } elseif ($step_no == 3) {
                     $session = UssdSession::where('session_id', $session_id)->first();
                     if ($last_part === $session->new_pin) {
                         try {
-                            // Update PIN in database
                             $agent = Agent::find($session->agent_id);
                             $agent->pin = $last_part;
                             $agent->save();
 
-                            // Log PIN change
                             $this->logAgentActivity($agent->id, 'pin_change', 'success');
+                            $message_string = "PIN changed successfully!\n*. Main Menu";
 
-                            $message_string = "PIN changed successfully!";
-
-                            // Send SMS notification
                             $this->sendNotification(
                                 $phone,
                                 "Your agent PIN has been changed successfully. If you did not authorize this change, please contact support immediately."
                             );
-
-                            $request_type = "3"; // End session
                         } catch (\Exception $e) {
                             Log::error('PIN change error', [
                                 'agent_id' => $session->agent_id,
                                 'error' => $e->getMessage()
                             ]);
-                            $message_string = "Failed to update PIN. Please try again later.";
-                            $request_type = "3"; // End session
+                            $message_string = "Failed to update PIN. Please try again later.\n*. Main Menu";
                         }
+                        $request_type = "3";
                     } else {
-                        $message_string = "PINs do not match. Enter new PIN:";
+                        $message_string = "PINs do not match. Enter new PIN:\n0. Back\n*. Main Menu";
                         $this->updateSession($session_id, 10, 2);
                     }
                 }
                 break;
-=======
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-        }
 
+            case 11: // Language Selection and Customer Support Menu
+                    if ($step_no == 1 && !empty($last_part)) {
+                        Log::info('Language Selection Step', [
+                            'session_id' => $session_id,
+                            'input' => $last_part,
+                            'phone' => $phone
+                        ]);
+
+                        if (is_numeric($last_part) && $last_part >= 1 && $last_part <= 2) {
+                            $language = $last_part;
+                            Log::info('Language Selected', [
+                                'language_id' => $language,
+                                'session_id' => $session_id
+                            ]);
+
+                            $this->updateSession($session_id, 11, 2, ["language_id" => $language]);
+                            $message_string = $this->getCustomerDeskMenu($language);
+                        } else {
+                            Log::warning('Invalid Language Selection', [
+                                'input' => $last_part,
+                                'session_id' => $session_id
+                            ]);
+                            // Invalid language selection - show menu again
+                            $geLanguages = Language::where('is_active', 1)->get();
+                            $language_menu = "Invalid selection. Choose language / Kuheta kusola. Sakulenu lizu\n\n";
+                            foreach ($geLanguages as $index => $language) {
+                                $language_menu .= ($index + 1) . ". " . $language->name . "\n";
+                            }
+                            $language_menu .= "\n0. Back\n*. Main Menu";
+                            $message_string = $language_menu;
+                        }
+                    } elseif ($step_no == 2 && !empty($last_part)) {
+                        $language = $getLastSessionInfo->language_id;
+                        Log::info('Customer Desk Menu Selection', [
+                            'step' => 2,
+                            'input' => $last_part,
+                            'language_id' => $language,
+                            'session_id' => $session_id
+                        ]);
+
+                        if (is_numeric($last_part) && $last_part >= 1 && $last_part <= 4) {
+                            switch($last_part) {
+                                case 1: // Complaints
+                                    $message_string = $this->getComplaintsMessage($language, "METER_PROMPT");
+                                    $this->updateSession($session_id, 12, 1, ["language_id" => $language]);
+                                    Log::info('Navigating to Complaints Flow', [
+                                        'new_case' => 12,
+                                        'language_id' => $language,
+                                        'session_id' => $session_id
+                                    ]);
+                                    break;
+
+                                case 2: // General Inquiries
+                                    $message_string = $this->getGeneralInquiriesMenu($language);
+                                    $this->updateSession($session_id, 13, 1, ["language_id" => $language]);
+                                    Log::info('Navigating to General Inquiries Flow', [
+                                        'new_case' => 13,
+                                        'language_id' => $language,
+                                        'session_id' => $session_id
+                                    ]);
+                                    break;
+
+                                case 3: // Customer Feedback
+                                    $message_string = $this->getFeedbackMessage($language, "PROMPT");
+                                    $this->updateSession($session_id, 14, 1, ["language_id" => $language]);
+                                    Log::info('Navigating to Customer Feedback Flow', [
+                                        'new_case' => 14,
+                                        'language_id' => $language,
+                                        'session_id' => $session_id
+                                    ]);
+                                    break;
+
+                                case 4: // Track Complaints
+                                    $message_string = $this->getTrackComplaintMessage($language, "PROMPT");
+                                    $this->updateSession($session_id, 15, 1, ["language_id" => $language]);
+                                    Log::info('Navigating to Track Complaints Flow', [
+                                        'new_case' => 15,
+                                        'language_id' => $language,
+                                        'session_id' => $session_id
+                                    ]);
+                                    break;
+                            }
+                        } else {
+                            Log::warning('Invalid Customer Desk Selection', [
+                                'input' => $last_part,
+                                'language_id' => $language,
+                                'session_id' => $session_id
+                            ]);
+                            $message_string = $this->getCustomerDeskMenu($language);
+                        }
+                    }
+                    break;
+
+            case 12: // Complaints Flow
+                        $language = $getLastSessionInfo->language_id;
+                        Log::info('Complaints Flow', [
+                            'step' => $step_no,
+                            'input' => $last_part,
+                            'language_id' => $language,
+                            'session_id' => $session_id,
+                            'phone' => $phone
+                        ]);
+
+                        if ($step_no == 1 && !empty($last_part)) {
+                            try {
+                                $complaint = $this->generateComplaintNumber();
+                                Log::info('Generated Complaint Number', [
+                                    'complaint_number' => $complaint,
+                                    'session_id' => $session_id
+                                ]);
+
+                                // Save the complaint
+                                $save_complaint = Complaint::create([
+                                    "complaint_number" => $complaint,
+                                    "phone_number" => $phone,
+                                    "session_id" => $session_id,
+                                    "communication_channel_id" => 1,
+                                    "complaint_status_id" => 1,
+                                    "meter_number" => $last_part
+                                ]);
+
+                                Log::info('Complaint Created', [
+                                    'complaint_id' => $save_complaint->id,
+                                    'complaint_number' => $complaint,
+                                    'meter_number' => $last_part,
+                                    'session_id' => $session_id
+                                ]);
+
+                                $message_string = $this->getComplaintsMessage($language, "TYPE_SELECTION");
+                                $this->updateSession($session_id, 12, 2, ["language_id" => $language]);
+
+                            } catch (\Exception $e) {
+                                Log::error('Error Creating Complaint', [
+                                    'error' => $e->getMessage(),
+                                    'trace' => $e->getTraceAsString(),
+                                    'session_id' => $session_id
+                                ]);
+                                $message_string = $language == 1 ?
+                                    "System error. Please try again later.\n*. Main Menu" :
+                                    "Kukala mukachi ka computer. Mwani temukenu.\n*. Main Menu";
+                                $request_type = 3;
+                            }
+
+                        } elseif ($step_no == 2 && !empty($last_part)) {
+                            if (is_numeric($last_part) && $last_part >= 1 && $last_part <= 3) {
+                                try {
+                                    $updating_complaint = Complaint::where('session_id', $session_id)
+                                        ->update(["complaint_category_id" => $last_part]);
+
+                                    Log::info('Complaint Category Updated', [
+                                        'category_id' => $last_part,
+                                        'session_id' => $session_id,
+                                        'update_success' => $updating_complaint
+                                    ]);
+
+                                    if ($last_part == 3) {
+                                        $message_string = $this->getComplaintsMessage($language, "SPECIFY");
+                                        $this->updateSession($session_id, 12, 3, ["language_id" => $language]);
+                                    } else {
+                                        $message_string = $this->getComplaintsMessage($language, "SUCCESS");
+
+                                        // Send confirmation SMS
+                                        try {
+                                            $this->sendComplaintConfirmation($phone, $session_id, $language);
+                                            Log::info('Complaint Confirmation SMS Sent', [
+                                                'phone' => $phone,
+                                                'session_id' => $session_id,
+                                                'language' => $language
+                                            ]);
+                                        } catch (\Exception $e) {
+                                            Log::error('SMS Sending Failed', [
+                                                'error' => $e->getMessage(),
+                                                'phone' => $phone,
+                                                'session_id' => $session_id
+                                            ]);
+                                        }
+
+                                        $request_type = 3;
+                                    }
+                                } catch (\Exception $e) {
+                                    Log::error('Error Updating Complaint Category', [
+                                        'error' => $e->getMessage(),
+                                        'session_id' => $session_id
+                                    ]);
+                                    $message_string = $this->getComplaintsMessage($language, "ERROR");
+                                    $request_type = 3;
+                                }
+                            } else {
+                                Log::warning('Invalid Complaint Type Selection', [
+                                    'input' => $last_part,
+                                    'session_id' => $session_id
+                                ]);
+                                $message_string = $this->getComplaintsMessage($language, "TYPE_SELECTION");
+                            }
+                        } elseif ($step_no == 3 && !empty($last_part)) {
+                            try {
+                                $updating_complaint = Complaint::where('session_id', $session_id)
+                                    ->update(["description" => $last_part]);
+
+                                Log::info('Complaint Description Updated', [
+                                    'description' => $last_part,
+                                    'session_id' => $session_id,
+                                    'update_success' => $updating_complaint
+                                ]);
+
+                                $message_string = $this->getComplaintsMessage($language, "SUCCESS");
+
+                                // Send confirmation SMS
+                                try {
+                                    $this->sendComplaintConfirmation($phone, $session_id, $language);
+                                    Log::info('Complaint Confirmation SMS Sent', [
+                                        'phone' => $phone,
+                                        'session_id' => $session_id,
+                                        'language' => $language
+                                    ]);
+                                } catch (\Exception $e) {
+                                    Log::error('SMS Sending Failed', [
+                                        'error' => $e->getMessage(),
+                                        'phone' => $phone,
+                                        'session_id' => $session_id
+                                    ]);
+                                }
+
+                                $request_type = 3;
+                            } catch (\Exception $e) {
+                                Log::error('Error Updating Complaint Description', [
+                                    'error' => $e->getMessage(),
+                                    'session_id' => $session_id
+                                ]);
+                                $message_string = $this->getComplaintsMessage($language, "ERROR");
+                                $request_type = 3;
+                            }
+                        }
+                        break;
+
+            case 13: // General Inquiries Flow
+                            $language = $getLastSessionInfo->language_id;
+
+                            Log::info('General Inquiries Flow Started', [
+                                'step' => $step_no,
+                                'input' => $last_part,
+                                'session_id' => $session_id,
+                                'phone' => $phone,
+                                'language_id' => $language
+                            ]);
+
+                            if ($step_no == 1 && !empty($last_part)) {
+                                try {
+                                    if (is_numeric($last_part) && $last_part >= 1 && $last_part <= 4) {
+                                        $inquiry_number = $this->generateInquiryNumber();
+
+                                        Log::info('Processing General Inquiry', [
+                                            'inquiry_number' => $inquiry_number,
+                                            'type' => $last_part,
+                                            'session_id' => $session_id
+                                        ]);
+
+                                        if ($last_part == 4) {
+                                            // Other - need specification
+                                            $new_inquiry = GeneralInquiry::create([
+                                                "inquiry_number" => $inquiry_number,
+                                                "phone_number" => $phone,
+                                                "session_id" => $session_id,
+                                                "communication_channel_id" => 1, // USSD
+                                                "general_inquiry_category_id" => $last_part,
+                                                "status" => 'pending',
+                                                "created_at" => now()
+                                            ]);
+
+                                            Log::info('Created General Inquiry for Other Category', [
+                                                'inquiry_id' => $new_inquiry->id,
+                                                'inquiry_number' => $inquiry_number
+                                            ]);
+
+                                            $message_string = ($language == 1) ?
+                                                "Please specify your inquiry:\n0. Back\n*. Main Menu" :
+                                                "Mwani shimunenu malwihu enu:\n0. Back\n*. Main Menu";
+
+                                            $this->updateSession($session_id, 13, 2, [
+                                                'inquiry_number' => $inquiry_number
+                                            ]);
+
+                                        } else {
+                                            // Handle predefined inquiry types
+                                            $new_inquiry = GeneralInquiry::create([
+                                                "inquiry_number" => $inquiry_number,
+                                                "phone_number" => $phone,
+                                                "session_id" => $session_id,
+                                                "communication_channel_id" => 1, // USSD
+                                                "general_inquiry_category_id" => $last_part,
+                                                "status" => 'pending',
+                                                "created_at" => now()
+                                            ]);
+
+                                            Log::info('Created General Inquiry', [
+                                                'inquiry_id' => $new_inquiry->id,
+                                                'inquiry_number' => $inquiry_number,
+                                                'category' => $last_part
+                                            ]);
+
+                                            // Send appropriate response based on inquiry type
+                                            switch($last_part) {
+                                                case 1: // How to access power
+                                                    $sms_message = ($language == 1) ?
+                                                        "Call us on 211-241296 with your details and we will guide you through electricity connection steps and requirements." :
+                                                        "Tumininaku nshinga ha 211-241296 nakuyilezha yuma yenu, tunamulezha mwakutwala kesi ka wuneñu.";
+                                                    break;
+
+                                                case 2: // How to buy units
+                                                    $sms_message = ($language == 1) ?
+                                                        "Dial *388*1#, choose payment option and make payment from your mobile money Account on any network." :
+                                                        "Kobolenu *388*1#, sakulenu mwakufweta nakufweta kufuma mu account yenu ya mobile money.";
+                                                    break;
+
+                                                case 3: // How to change tariff plan
+                                                    $sms_message = ($language == 1) ?
+                                                        "Please call us on 211-241296 and our team will help you change your current tariff plan." :
+                                                        "Mwani tuminaku nshinga ha 211-241296 antu etu akumikafwa kuchinja tariff plan yenu.";
+                                                    break;
+                                            }
+
+                                            $message_string = ($language == 1) ?
+                                                "Thank you for your inquiry. You will receive an SMS with details shortly." :
+                                                "Kusakilila hakwihula. Mukutambula SMS na yilezha yejima mukapindi kafwipi.";
+
+                                            try {
+                                                $this->sendNotification($phone, $sms_message);
+                                                Log::info('Sent inquiry response SMS', [
+                                                    'phone' => $phone,
+                                                    'inquiry_number' => $inquiry_number
+                                                ]);
+                                            } catch (\Exception $e) {
+                                                Log::error('Failed to send inquiry SMS', [
+                                                    'error' => $e->getMessage(),
+                                                    'phone' => $phone
+                                                ]);
+                                            }
+
+                                            $request_type = "3";
+                                        }
+
+                                    } else {
+                                        Log::warning('Invalid inquiry type selection', [
+                                            'input' => $last_part,
+                                            'session_id' => $session_id
+                                        ]);
+
+                                        $message_string = ($language == 1) ?
+                                            "Invalid selection. Please choose:\n" .
+                                            "1. How to access power?\n" .
+                                            "2. How to buy units?\n" .
+                                            "3. How to change tariff plan?\n" .
+                                            "4. Other specify\n\n" .
+                                            "0. Back\n*. Main Menu" :
+                                            "Kusola kwaheta. Mwani sakulenu:\n" .
+                                            "1. Mwakutwala kesi ka wuneñu?\n" .
+                                            "2. Mwakula yuniti?\n" .
+                                            "3. Mwakuchinja tariff plan?\n" .
+                                            "4. Yuma yikwawu\n\n" .
+                                            "0. Back\n*. Main Menu";
+                                    }
+
+                                } catch (\Exception $e) {
+                                    Log::error('Error processing general inquiry', [
+                                        'error' => $e->getMessage(),
+                                        'trace' => $e->getTraceAsString(),
+                                        'session_id' => $session_id
+                                    ]);
+
+                                    $message_string = ($language == 1) ?
+                                        "System error. Please try again later.\n*. Main Menu" :
+                                        "Kukala mukachi ka computer. Mwani temukenu.\n*. Main Menu";
+                                    $request_type = "3";
+                                }
+                            } elseif ($step_no == 2 && !empty($last_part)) {
+                                try {
+                                    Log::info('Processing custom inquiry description', [
+                                        'session_id' => $session_id,
+                                        'description' => $last_part
+                                    ]);
+
+                                    $updating_inquiry = GeneralInquiry::where('session_id', $session_id)
+                                        ->update([
+                                            "description" => $last_part,
+                                            "updated_at" => now()
+                                        ]);
+
+                                    if ($updating_inquiry) {
+                                        $inquiry = GeneralInquiry::where('session_id', $session_id)->first();
+
+                                        $message_string = ($language == 1) ?
+                                            "Thank you for your inquiry. Our team will contact you soon." :
+                                            "Kusakilila hakwihula. Antu etu akezha kumitumina mukapindi kafwipi.";
+
+                                        $sms_message = ($language == 1) ?
+                                            "Thank you for your inquiry. Your reference number is " . $inquiry->inquiry_number .
+                                            ". Our team will contact you soon. For urgent matters, call 211-241296." :
+                                            "Kusakilila hakwihula. Nambala yenu ya reference yinayi " . $inquiry->inquiry_number .
+                                            ". Antu etu akezha kumitumina. Mwatela kutumina nshinga ha 211-241296 hakuneña chachipompelu.";
+
+                                        try {
+                                            $this->sendNotification($phone, $sms_message);
+                                            Log::info('Sent custom inquiry confirmation SMS', [
+                                                'phone' => $phone,
+                                                'inquiry_number' => $inquiry->inquiry_number
+                                            ]);
+                                        } catch (\Exception $e) {
+                                            Log::error('Failed to send custom inquiry SMS', [
+                                                'error' => $e->getMessage(),
+                                                'phone' => $phone
+                                            ]);
+                                        }
+                                    } else {
+                                        Log::error('Failed to update inquiry description', [
+                                            'session_id' => $session_id
+                                        ]);
+                                        $message_string = ($language == 1) ?
+                                            "Failed to save your inquiry. Please try again." :
+                                            "Kukala hakusenda malwihu enu. Mwani temukenu.";
+                                    }
+
+                                    $request_type = "3";
+
+                                } catch (\Exception $e) {
+                                    Log::error('Error saving custom inquiry', [
+                                        'error' => $e->getMessage(),
+                                        'trace' => $e->getTraceAsString(),
+                                        'session_id' => $session_id
+                                    ]);
+
+                                    $message_string = ($language == 1) ?
+                                        "System error. Please try again later.\n*. Main Menu" :
+                                        "Kukala mukachi ka computer. Mwani temukenu.\n*. Main Menu";
+                                    $request_type = "3";
+                                }
+                            }
+                            break;
+                            case 14: // Customer Feedback Flow
+                                $language = $getLastSessionInfo->language_id;
+
+                                Log::info('Customer Feedback Flow Started', [
+                                    'step' => $step_no,
+                                    'input' => $last_part,
+                                    'session_id' => $session_id,
+                                    'phone' => $phone,
+                                    'language_id' => $language
+                                ]);
+
+                                if ($step_no == 1 && !empty($last_part)) {
+                                    try {
+                                        $feedback_number = $this->generateFeedbackNumber();
+
+                                        Log::info('Processing Customer Feedback', [
+                                            'feedback_number' => $feedback_number,
+                                            'session_id' => $session_id
+                                        ]);
+
+                                        // Save the customer feedback
+                                        $new_feedback = CustomerFeedback::create([
+                                            "feedback_number" => $feedback_number,
+                                            "phone_number" => $phone,
+                                            "session_id" => $session_id,
+                                            "communication_channel_id" => 1, // USSD
+                                            "description" => $last_part,
+                                            "status" => 'submitted',
+                                            "created_at" => now()
+                                        ]);
+
+                                        Log::info('Feedback Created', [
+                                            'feedback_id' => $new_feedback->id,
+                                            'feedback_number' => $feedback_number
+                                        ]);
+
+                                        $message_string = ($language == 1) ?
+                                            "Thank you for your feedback. Your reference number is: " . $feedback_number . "\n*. Main Menu" :
+                                            "Atulezhiku wunsahu wenu. Nambala yenu ya reference: " . $feedback_number . "\n*. Main Menu";
+
+                                        // Send SMS confirmation
+                                        $sms_message = ($language == 1) ?
+                                            "Thank you for your feedback. Reference number: " . $feedback_number .
+                                            ". We value your feedback and will use it to improve our services. For any queries, call 211-241296" :
+                                            "Atulezhiku wunsahu wenu. Nambala ya reference: " . $feedback_number .
+                                            ". Wunsahu wenu wunawuzhaku nakuwuzatisha mukulamisha nzata zhehu. Muchidi wahembi tumininaku nshinga ha 211-241296";
+
+                                        try {
+                                            $this->sendNotification($phone, $sms_message);
+                                            Log::info('Feedback confirmation SMS sent', [
+                                                'phone' => $phone,
+                                                'feedback_number' => $feedback_number
+                                            ]);
+                                        } catch (\Exception $e) {
+                                            Log::error('Failed to send feedback confirmation SMS', [
+                                                'error' => $e->getMessage(),
+                                                'phone' => $phone
+                                            ]);
+                                        }
+
+                                        $request_type = "3";
+
+                                    } catch (\Exception $e) {
+                                        Log::error('Error processing feedback', [
+                                            'error' => $e->getMessage(),
+                                            'trace' => $e->getTraceAsString(),
+                                            'session_id' => $session_id
+                                        ]);
+
+                                        $message_string = ($language == 1) ?
+                                            "System error. Please try again later.\n*. Main Menu" :
+                                            "Kukala mukachi ka computer. Mwani temukenu.\n*. Main Menu";
+                                        $request_type = "3";
+                                    }
+                                }
+                                break;
+
+                                case 15: // Track Complaints Flow
+                                    $language = $getLastSessionInfo->language_id;
+
+                                    Log::info('Complaint Tracking Flow Started', [
+                                        'step' => $step_no,
+                                        'input' => $last_part,
+                                        'session_id' => $session_id,
+                                        'phone' => $phone,
+                                        'language_id' => $language
+                                    ]);
+
+                                    if ($step_no == 1 && !empty($last_part)) {
+                                        try {
+                                            Log::info('Searching for complaint', [
+                                                'complaint_number' => $last_part,
+                                                'session_id' => $session_id
+                                            ]);
+
+                                            // Changed from complaintStatus to status relationship
+                                            $complaint = Complaint::where('complaint_number', $last_part)->first();
+
+                                            if ($complaint) {
+                                                Log::info('Complaint found', [
+                                                    'complaint_id' => $complaint->id,
+                                                    'status_id' => $complaint->complaint_status_id,
+                                                    'created_at' => $complaint->created_at
+                                                ]);
+
+                                                // Get status text in appropriate language
+                                                $status = self::COMPLAINT_STATUSES[$complaint->complaint_status_id][$language == 1 ? 'en' : 'ln'] ??
+                                                         ($language == 1 ? 'Unknown Status' : 'Kosi kutachikiza muchidi');
+
+                                                // Format date according to language
+                                                $date_format = $complaint->created_at->format('d/m/Y H:i');
+
+                                                if ($language == 1) {
+                                                    $message_string = "Complaint Details:\n" .
+                                                                    "Number: " . $complaint->complaint_number . "\n" .
+                                                                    "Status: " . $status . "\n" .
+                                                                    "Reported: " . $date_format;
+
+                                                    // Add complaint category if exists
+                                                    if ($complaint->complaint_category_id) {
+                                                        $category = $this->getComplaintCategory($complaint->complaint_category_id, $language);
+                                                        $message_string .= "\nType: " . $category;
+                                                    }
+
+                                                    // Add description if exists
+                                                    if ($complaint->description) {
+                                                        $message_string .= "\nDetails: " . substr($complaint->description, 0, 50);
+                                                    }
+
+                                                    $message_string .= "\n\n*. Main Menu";
+
+                                                } else {
+                                                    $message_string = "Nyabu:\n" .
+                                                                    "Nambala: " . $complaint->complaint_number . "\n" .
+                                                                    "Muchidi: " . $status . "\n" .
+                                                                    "Ifuku: " . $date_format;
+
+                                                    // Add complaint category if exists
+                                                    if ($complaint->complaint_category_id) {
+                                                        $category = $this->getComplaintCategory($complaint->complaint_category_id, $language);
+                                                        $message_string .= "\nMuchidi: " . $category;
+                                                    }
+
+                                                    // Add description if exists
+                                                    if ($complaint->description) {
+                                                        $message_string .= "\nYilezha: " . substr($complaint->description, 0, 50);
+                                                    }
+
+                                                    $message_string .= "\n\n*. Main Menu";
+                                                }
+
+                                                // Send SMS with status
+                                                try {
+                                                    $sms_message = ($language == 1) ?
+                                                        "Your complaint " . $complaint->complaint_number . " status is: " . $status .
+                                                        ". For updates, call 211-241296" :
+                                                        "Nyabu yenu " . $complaint->complaint_number . " yili muchidi wa: " . $status .
+                                                        ". Hakukeña yayindi, tumininaku nshinga ha 211-241296";
+
+                                                    $this->sendNotification($phone, $sms_message);
+
+                                                    Log::info('Complaint tracking SMS sent', [
+                                                        'phone' => $phone,
+                                                        'complaint_number' => $complaint->complaint_number,
+                                                        'status' => $status
+                                                    ]);
+                                                } catch (\Exception $e) {
+                                                    Log::error('Failed to send tracking SMS', [
+                                                        'error' => $e->getMessage(),
+                                                        'phone' => $phone,
+                                                        'complaint_number' => $complaint->complaint_number
+                                                    ]);
+                                                }
+
+                                            } else {
+                                                Log::warning('Complaint not found', [
+                                                    'searched_number' => $last_part,
+                                                    'session_id' => $session_id
+                                                ]);
+
+                                                $message_string = ($language == 1) ?
+                                                    "Complaint not found. Please check the number and try again.\n0. Back\n*. Main Menu" :
+                                                    "Kakweshi nyabu. Mwani talishenu nambala nakutemakana.\n0. Back\n*. Main Menu";
+                                            }
+
+                                            $request_type = "3";
+
+                                        } catch (\Exception $e) {
+                                            Log::error('Error in complaint tracking', [
+                                                'error' => $e->getMessage(),
+                                                'trace' => $e->getTraceAsString(),
+                                                'session_id' => $session_id
+                                            ]);
+
+                                            $message_string = ($language == 1) ?
+                                                "System error. Please try again later.\n*. Main Menu" :
+                                                "Kukala mukachi ka computer. Mwani temukenu.\n*. Main Menu";
+                                            $request_type = "3";
+                                        }
+                                    }
+                                    break;
+
+
+
+                        }
+
+            } catch (\Exception $e) {
+                Log::error('Unhandled exception in handleUssd', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                    'request' => [
+                        'session_id' => $request->SESSION_ID,
+                        'phone' => $request->MSISDN,
+                        'message' => $request->MESSAGE
+                    ]
+                ]);
+
+                return $this->formatResponse(
+                    "System error. Please try again.\n*. Main Menu",
+                    "3"
+                );
+            }
         return $this->formatResponse($message_string, $request_type);
-    }
-
-    private function formatResponse($message, $request_type)
-    {
-        return response()->json([
-            "ussd_response" => [
-                "USSD_BODY" => $message,
-                "REQUEST_TYPE" => $request_type
-            ]
-        ]);
     }
 
     private function checkCustomerBalance($customerCode)
@@ -762,74 +1398,234 @@ class UssdSessionController extends Controller
         }
     }
 
-    private function updateSession($session_id, $case_no, $step_no, $additional_data = [])
+    private function getPreviousMenu($case_no, $step_no, $sessionInfo)
     {
-        $update_data = array_merge([
-            "case_no" => $case_no,
-            "step_no" => $step_no
-        ], $additional_data);
+        switch ($case_no) {
+            case 1:
+                return $this->getMainMenu();
 
-        UssdSession::where('session_id', $session_id)->update($update_data);
-    }
+            case 2: // Buy Electricity Flow
+                return "Enter your Customer ID:\n0. Back\n*. Main Menu";
 
-<<<<<<< HEAD
-    private function standardizePhoneNumber($phone)
-    {
-        // Remove any spaces or special characters
-        $phone = preg_replace('/[^0-9]/', '', $phone);
+            case 3: // View Balance Flow
+                return "Enter your Customer ID:\n0. Back\n*. Main Menu";
 
-        // If number starts with '260', keep it as is
-        if (strpos($phone, '260') === 0) {
-            return $phone;
+            case 4: // Query Transaction Flow
+                return "Enter Transaction ID:\n0. Back\n*. Main Menu";
+
+            case 5: // Customer Desk
+                switch ($step_no) {
+                    case 1:
+                        return "Select Option:\n1. Report Blackout\n2. Report Fault\n3. General Inquiry\n0. Back\n*. Main Menu";
+                    case 2:
+                        return "Enter your meter number:\n0. Back\n*. Main Menu";
+                    case 3:
+                        return "Enter your meter number:\n0. Back\n*. Main Menu";
+                    case 4:
+                        return "Type your inquiry:\n0. Back\n*. Main Menu";
+                    case 5:
+                        return "Select fault type:\n1. No Power\n2. Meter Error\n3. Connection Issue\n4. Other\n0. Back\n*. Main Menu";
+                    default:
+                        return $this->getMainMenu();
+                }
+
+            case 6: // Agent Login Flow
+                switch ($step_no) {
+                    case 1:
+                        return "Enter your PIN:\n0. Back\n*. Main Menu";
+                    case 2:
+                        return "Welcome " . ($sessionInfo->agent ? $sessionInfo->agent->business_name : '') .
+                               "\n1. Sell Electricity\n2. Check Float\n3. Buy Float\n4. Change PIN\n0. Back\n*. Main Menu";
+                    default:
+                        return $this->getMainMenu();
+                }
+
+            case 7: // Agent Electricity Sale
+                switch ($step_no) {
+                    case 1:
+                        return "Enter customer code:\n0. Back\n*. Main Menu";
+                    case 2:
+                        return "Enter amount:\n0. Back\n*. Main Menu";
+                    case 3:
+                        return "Confirm purchase:\n1. Confirm\n2. Cancel\n0. Back\n*. Main Menu";
+                    default:
+                        return $this->getMainMenu();
+                }
+
+            case 8: // Buy Float
+                return "Enter amount to purchase:\n0. Back\n*. Main Menu";
+
+            case 10: // PIN Change Flow
+                switch ($step_no) {
+                    case 1:
+                        return "Enter your current PIN:\n0. Back\n*. Main Menu";
+                    case 2:
+                        return "Enter new PIN (4 digits):\n0. Back\n*. Main Menu";
+                    case 3:
+                        return "Confirm new PIN:\n0. Back\n*. Main Menu";
+                    default:
+                        return $this->getMainMenu();
+                }
+
+            default:
+                return $this->getMainMenu();
         }
-
-        // If number starts with '0', replace with '260'
-        if (strpos($phone, '0') === 0) {
-            return '260' . substr($phone, 1);
-        }
-
-        // If number has neither prefix, add '260'
-        if (strlen($phone) === 9) {
-            return '260' . $phone;
-        }
-
-        return $phone;
     }
 
-    private function isWhitelistedAgent($phone)
+    private function getMainMenu()
     {
-        // Standardize the input phone number
-        $standardizedPhone = $this->standardizePhoneNumber($phone);
-
-        // Check for the phone number in multiple formats
-        return Agent::where(function($query) use ($standardizedPhone, $phone) {
-            $query->where('agent_phone_number', $standardizedPhone)
-                ->orWhere('agent_phone_number', $phone)
-                ->orWhere('agent_phone_number', '0' . substr($standardizedPhone, 3))
-                // ->orWhere('business_phone_number', $standardizedPhone)
-                // ->orWhere('personal_phone_number', $standardizedPhone)
-                ;
-        })
-        ->where('is_active', true)
-        ->exists();
-
-        Log::info('Agent whitelist check', [
-            'original_phone' => $phone,
-            'standardized_phone' => $standardizedPhone,
-            'is_whitelisted' => $exists
-        ]);
-
-        return $exists;
+        return "Welcome to REA\n1. Buy Electricity\n2. View Balance\n3. Query Transaction\n4. Customer Desk\n5. Agent Login\n*. Main Menu";
     }
-=======
-    private function isWhitelistedAgent($phone)
+
+    private function processAgentPayment($agent_id, $customer_id, $amount, $meter_number)
     {
-        return Agent::where('agent_phone_number', $phone)
-            ->where('is_active', true)
-            ->exists();
+        try {
+            Log::info('Starting agent payment process', [
+                'agent_id' => $agent_id,
+                'customer_id' => $customer_id,
+                'amount' => $amount,
+                'meter_number' => $meter_number
+            ]);
+
+            // 1. Verify agent
+            $agent = Agent::find($agent_id);
+            if (!$agent) {
+                Log::error('Agent not found', ['agent_id' => $agent_id]);
+                return [
+                    'success' => false,
+                    'message' => 'Agent not found'
+                ];
+            }
+
+            // 2. Verify float balance
+            if ($agent->float_balance < $amount) {
+                Log::warning('Insufficient float balance', [
+                    'required' => $amount,
+                    'available' => $agent->float_balance
+                ]);
+                return [
+                    'success' => false,
+                    'message' => 'Insufficient float balance'
+                ];
+            }
+
+            // 3. Get customer details
+            $customer = Customer::find($customer_id);
+            if (!$customer) {
+                Log::error('Customer not found', ['customer_id' => $customer_id]);
+                return [
+                    'success' => false,
+                    'message' => 'Customer not found'
+                ];
+            }
+
+            // 4. Generate reference
+            $reference = 'FLT' . rand(1000000000, 9999999999);
+
+            try {
+                // 5. Create float transaction
+                $floatTransaction = FloatTransaction::create([
+                    'agent_id' => $agent_id,
+                    'amount' => $amount,
+                    'type' => 'debit',
+                    'reference_number' => $reference,
+                    'status' => 'pending',
+                    'description' => 'Electricity purchase',
+                    'balance_before' => $agent->float_balance,
+                    'balance_after' => $agent->float_balance - $amount,
+                ]);
+
+                Log::info('Float transaction created', [
+                    'transaction_id' => $floatTransaction->id,
+                    'reference' => $reference
+                ]);
+
+                // 6. Create payment record
+                $payment = Payment::create([
+                    'phone_number' => $customer->phone_number,
+                    'payment_method_id' => 3,        // Agent Float
+                    'payment_channel_id' => 3,       // zamtel
+                    'meter_number' => $meter_number,
+                    'customer_id' => $customer_id,
+                    'agent_id' => $agent_id,
+                    'amount_paid' => $amount,
+                    'payment_status_id' => 0,
+                    'payment_reference_number' => $reference,
+                    'retry_count' => 1,
+                    'transaction_type_id' => 1       // credit
+                ]);
+
+                Log::info('Payment record created', [
+                    'payment_id' => $payment->id,
+                    'reference' => $reference
+                ]);
+
+                // 7. Generate token
+                $token = 'TOK' . rand(10000000000, 99999999999);
+                $units = round($amount / 7.08, 2);
+
+                // 8. Update agent float balance
+                $agent->float_balance -= $amount;
+                $agent->save();
+
+                // 9. Update float transaction status
+                $floatTransaction->update([
+                    'status' => 'completed'
+                ]);
+
+                // 10. Update payment status
+                $payment->update([
+                    'payment_status_id' => 1,
+                    'transaction_id' => $token
+                ]);
+
+                Log::info('Agent payment successful', [
+                    'reference' => $reference,
+                    'token' => $token,
+                    'units' => $units
+                ]);
+
+                return [
+                    'success' => true,
+                    'token' => $token,
+                    'external_id' => $reference,
+                    'units' => $units
+                ];
+
+            } catch (\Exception $e) {
+                Log::error('Transaction processing error', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+
+                if (isset($floatTransaction)) {
+                    $floatTransaction->update(['status' => 'failed']);
+                }
+
+                if (isset($payment)) {
+                    $payment->update([
+                        'payment_status_id' => 2,
+                        'error_message' => $e->getMessage()
+                    ]);
+                }
+
+                throw $e;
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Agent payment processing error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Payment processing failed'
+            ];
+        }
     }
 
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
+
     private function validateCustomer($customerCode)
     {
         try {
@@ -938,345 +1734,104 @@ class UssdSessionController extends Controller
         }
     }
 
-    private function checkBalance($meterNumber)
+    private function formatResponse($message, $request_type)
     {
-        try {
-            $response = Http::withHeaders([
-                'Accept' => 'application/json',
-                'X-API-KEY' => config('services.sparkmeter.key'),
-                'X-API-SECRET' => config('services.sparkmeter.secret')
-            ])->get('https://www.sparkmeter.cloud/api/v1/meters/' . $meterNumber . '/balance');
+        return response()->json([
+            "ussd_response" => [
+                "USSD_BODY" => $message,
+                "REQUEST_TYPE" => $request_type
+            ]
+        ]);
+    }
 
-            if ($response->successful()) {
-                $data = $response->json();
-                return [
-                    'success' => true,
-                    'balance' => $data['balance'] ?? 0,
-                    'units' => $data['units'] ?? 'kWh'
-                ];
-            }
+    private function updateSession($session_id, $case_no, $step_no, $additional_data = [])
+    {
+        $update_data = array_merge([
+            "case_no" => $case_no,
+            "step_no" => $step_no
+        ], $additional_data);
 
-            return ['success' => false, 'message' => 'Balance check failed'];
+        UssdSession::where('session_id', $session_id)->update($update_data);
+    }
 
-        } catch (\Exception $e) {
-            Log::error('Balance check error', ['error' => $e->getMessage()]);
-            return ['success' => false, 'message' => 'Service unavailable'];
+    private function standardizePhoneNumber($phone)
+    {
+        // Remove any spaces or special characters
+        $phone = preg_replace('/[^0-9]/', '', $phone);
+
+        // If number starts with '260', keep it as is
+        if (strpos($phone, '260') === 0) {
+            return $phone;
         }
-    }
 
-    private function processPayment($phone, $amount, $meter_number, $customer_number)
-    {
-        try {
-            Log::info('Processing payment', [
-                'phone' => $phone,
-                'amount' => $amount,
-                'meter' => $meter_number,
-                'customer' => $customer_number
-            ]);
-
-            // Generate a mock token
-            $token = 'TOK' . rand(1000000, 9999999);
-
-            // Mock units calculation (for testing)
-            $units = round(($amount / 7.08), 2); // Using sample rate of 7.08 per unit
-
-            // Create payment record
-            $payment = Payment::create([
-                'phone_number' => $phone,
-                'meter_number' => $meter_number,
-                'customer_id' => $customer_number,
-                'amount_paid' => $amount,
-                'payment_status_id' => 1, // Success
-                'payment_reference_number' => $token,
-            ]);
-
-            Log::info('Payment processed successfully', [
-                'token' => $token,
-                'units' => $units,
-                'reference' => $payment->payment_reference_number
-            ]);
-
-            return [
-                'success' => true,
-                'token' => $token,
-                'units' => $units,
-                'reference' => $payment->payment_reference_number
-            ];
-
-        } catch (\Exception $e) {
-            Log::error('Payment processing failed', [
-                'error' => $e->getMessage()
-            ]);
-            return [
-                'success' => false,
-                'message' => 'Payment processing failed'
-            ];
+        // If number starts with '0', replace with '260'
+        if (strpos($phone, '0') === 0) {
+            return '260' . substr($phone, 1);
         }
-    }
 
-    private function queryTransaction($reference)
-    {
-        try {
-            $payment = Payment::where('payment_reference_number', $reference)->first();
-
-            if (!$payment) {
-                return "Not successful";
-            }
-
-            return [
-                'amount' => $payment->amount_paid,
-                'token' => $payment->payment_reference_number,
-                'date' => $payment->created_at->format('Y-m-d H:i:s'),
-                'status' => 'Success',
-                'meter_number' => $payment->meter_number
-            ];
-
-        } catch (\Exception $e) {
-            Log::error('Transaction query failed', ['error' => $e->getMessage()]);
-            return "Not successful";
+        // If number has neither prefix, add '260'
+        if (strlen($phone) === 9) {
+            return '260' . $phone;
         }
+
+        return $phone;
     }
-    // When using the validateCustomer function in your switch case:
-    private function handleCustomerValidation($last_part, $session_id)
+
+    function generateConversationId()
     {
-        try {
-            Log::info('Starting customer validation', [
-                'input' => $last_part,
-                'session_id' => $session_id
-            ]);
+        $random = rand(100000000000000000, 999999999999999999);
 
-            $customer = $this->validateCustomer($last_part);
-
-            if ($customer) {
-                $message = "Customer Name: " . $customer->name . "\nEnter amount:";
-                $this->updateSession($session_id, 2, 2, ['customer_id' => $customer->id]);
-
-                Log::info('Customer validation successful', [
-                    'customer_id' => $customer->id,
-                    'session_id' => $session_id
-                ]);
-            } else {
-                $message = "Invalid Customer ID. Try again:";
-                Log::warning('Customer validation failed', [
-                    'input' => $last_part,
-                    'session_id' => $session_id
-                ]);
-            }
-
-            return $message;
-
-        } catch (\Exception $e) {
-            Log::error('Error in customer validation handler', [
-                'input' => $last_part,
-                'session_id' => $session_id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-            return "System error. Please try again later.";
+        // Check if the payment reference number already exists in the database
+        if (DB::table('payments')->where('payment_reference_number', $random)->exists()) {
+            // If the payment reference number already exists, generate a new one recursively
+            return $this->generateConversationId();
         }
+
+        return $random;
     }
 
-    private function validateMeterNumber($meter_number)
+    function generateComplaintNumber()
     {
-        return Customer::where('meter_number', $meter_number)->first();
-    }
+        $prefix = 'CN'; // Prefix for the complaint number
+        $random = rand(1000000, 9999999);
+        $raw_complaint_number = $prefix . $random;
 
-    private function getAgentFloat($agent_id)
-    {
-        return Agent::find($agent_id)->float_balance ?? 0;
-    }
-
-
-    private function processAgentPayment($agent_id, $customer_id, $amount, $meter_number)
-    {
-        try {
-            Log::info('Starting agent payment process', [
-                'agent_id' => $agent_id,
-                'customer_id' => $customer_id,
-                'amount' => $amount,
-                'meter_number' => $meter_number
-            ]);
-
-            // 1. Verify agent
-            $agent = Agent::find($agent_id);
-            if (!$agent) {
-                Log::error('Agent not found', ['agent_id' => $agent_id]);
-                return [
-                    'success' => false,
-                    'message' => 'Agent not found'
-                ];
-            }
-
-            // 2. Verify float balance
-            if ($agent->float_balance < $amount) {
-                Log::warning('Insufficient float balance', [
-                    'required' => $amount,
-                    'available' => $agent->float_balance
-                ]);
-                return [
-                    'success' => false,
-                    'message' => 'Insufficient float balance'
-                ];
-            }
-
-            // 3. Get customer details
-            $customer = Customer::find($customer_id);
-            if (!$customer) {
-                Log::error('Customer not found', ['customer_id' => $customer_id]);
-                return [
-                    'success' => false,
-                    'message' => 'Customer not found'
-                ];
-            }
-
-            // 4. Generate reference
-<<<<<<< HEAD
-            $reference = 'FLT' . rand(100000, 999999);
-=======
-            $reference = 'FLT' . rand(1000000000, 9999999999);
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-
-            try {
-                // 5. Create float transaction
-                $floatTransaction = FloatTransaction::create([
-                    'agent_id' => $agent_id,
-                    'amount' => $amount,
-                    'type' => 'debit',
-                    'reference_number' => $reference,
-                    'status' => 'pending',
-                    'description' => 'Electricity purchase',
-                    'balance_before' => $agent->float_balance,
-                    'balance_after' => $agent->float_balance - $amount,
-                ]);
-
-                Log::info('Float transaction created', [
-                    'transaction_id' => $floatTransaction->id,
-                    'reference' => $reference
-                ]);
-
-                // 6. Create payment record
-                $payment = Payment::create([
-                    'phone_number' => $customer->phone_number,
-<<<<<<< HEAD
-=======
-                    'payment_method_id' => 3,        // Agent Float
-                    'payment_channel_id' => 3,       // zamtel
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-                    'meter_number' => $meter_number,
-                    'customer_id' => $customer_id,
-                    'agent_id' => $agent_id,
-                    'amount_paid' => $amount,
-<<<<<<< HEAD
-                    'payment_status_id' => 0,
-                    'payment_reference_number' => $reference
-                ]);
-
-                // 7. Mock successful payment (for testing)
-                $token = 'TOK' . rand(1000000, 9999999);
-=======
-                    'payment_status_id' => 1,
-                    'payment_reference_number' => $reference,
-                    'retry_count' => 1,
-                    'transaction_type_id' => 1,      // credit
-                ]);
-
-                Log::info('Payment record created', [
-                    'payment_id' => $payment->id,
-                    'reference' => $ref_number
-                ]);
-
-                // 7. Mock successful payment (for testing)
-                $token = 'TOK' . rand(10000000000, 99999999999);
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-                $units = round($amount / 7.08, 2);
-
-                // 8. Update agent float balance
-                $agent->float_balance -= $amount;
-                $agent->save();
-
-                // 9. Update float transaction status
-                $floatTransaction->update([
-                    'status' => 'completed'
-                ]);
-
-                // 10. Update payment status
-                $payment->update([
-                    'payment_status_id' => 1,
-                    'transaction_id' => $token
-                ]);
-
-                Log::info('Agent payment successful', [
-                    'reference' => $reference,
-                    'token' => $token,
-                    'units' => $units
-                ]);
-
-                return [
-                    'success' => true,
-                    'token' => $token,
-                    'external_id' => $reference,
-                    'units' => $units
-                ];
-
-            } catch (\Exception $e) {
-                Log::error('Transaction processing error', [
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString()
-                ]);
-
-                if (isset($floatTransaction)) {
-                    $floatTransaction->update(['status' => 'failed']);
-                }
-
-                if (isset($payment)) {
-                    $payment->update([
-                        'payment_status_id' => 2,
-                        'error_message' => $e->getMessage()
-                    ]);
-                }
-
-                throw $e;
-            }
-
-        } catch (\Exception $e) {
-            Log::error('Agent payment processing error', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-
-            return [
-                'success' => false,
-                'message' => 'Payment processing failed'
-            ];
+        if (DB::table('complaints')->where('complaint_number', $raw_complaint_number)->exists()) {
+            return $this->generateComplaintNumber();
         }
+
+        return $raw_complaint_number;
     }
 
-    private function logAgentActivity($agent_id, $activity_type, $status)
+    function generateInquiryNumber()
     {
-        if ($agent_id) {
-            AgentActivityLog::create([
-                'agent_id' => $agent_id,
-                'activity_type' => $activity_type,
-                'session_id' => request()->SESSION_ID,
-                'phone_number' => request()->MSISDN,
-                'status' => $status,
-                'ip_address' => request()->ip()
-            ]);
+        $prefix = 'IN';
+        $random = rand(1000000, 9999999);
+        $inquiry_number = $prefix . $random;
+
+        if (DB::table('general_inquiries')->where('inquiry_number', $inquiry_number)->exists()) {
+            return $this->generateInquiryNumber();
         }
+
+        return $inquiry_number;
     }
 
-    private function sendSms($phone, $message)
+    private function isWhitelistedAgent($phone)
     {
-        // Implement SMS sending logic
-        Log::info('SMS Notification', ['phone' => $phone, 'message' => $message]);
-        return true;
+        $standardizedPhone = $this->standardizePhoneNumber($phone);
+
+        return Agent::where(function($query) use ($standardizedPhone, $phone) {
+            $query->where('agent_phone_number', $standardizedPhone)
+                ->orWhere('agent_phone_number', $phone)
+                ->orWhere('agent_phone_number', '0' . substr($standardizedPhone, 3));
+        })
+        ->where('is_active', true)
+        ->exists();
     }
 
     private function validateAgentPin($phone, $pin)
     {
         try {
-<<<<<<< HEAD
-            // Standardize the phone number first
             $standardizedPhone = $this->standardizePhoneNumber($phone);
 
             Log::info('Starting PIN validation', [
@@ -1285,13 +1840,10 @@ class UssdSessionController extends Controller
                 'pin_length' => strlen($pin)
             ]);
 
-            // Find agent with multiple phone number formats
             $agent = Agent::where(function($query) use ($standardizedPhone, $phone) {
                 $query->where('agent_phone_number', $standardizedPhone)
                     ->orWhere('agent_phone_number', $phone)
-                    ->orWhere('agent_phone_number', '0' . substr($standardizedPhone, 3))
-                    ->orWhere('business_phone_number', $standardizedPhone)
-                    ->orWhere('personal_phone_number', $standardizedPhone);
+                    ->orWhere('agent_phone_number', '0' . substr($standardizedPhone, 3));
             })
             ->where('is_active', true)
             ->first();
@@ -1301,39 +1853,10 @@ class UssdSessionController extends Controller
                     'phone' => $phone,
                     'standardized_phone' => $standardizedPhone
                 ]);
-=======
-            Log::info('Starting PIN validation', [
-                'phone' => $phone,
-                'pin_length' => strlen($pin),
-                'raw_pin' => $pin
-            ]);
-
-            // Find agent first
-            $agent = Agent::where('agent_phone_number', $phone)
-                        ->where('is_active', true)
-                        ->first();
-
-            if (!$agent) {
-                Log::warning('No agent found for phone number', ['phone' => $phone]);
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                 return null;
             }
 
-            Log::info('Agent found for validation', [
-                'agent_id' => $agent->id,
-                'business_name' => $agent->business_name,
-                'stored_pin' => $agent->pin,
-                'provided_pin' => $pin,
-                'pin_match' => ($agent->pin === $pin)
-            ]);
-
-<<<<<<< HEAD
-            // Ensure we're comparing strings
             if ((string)$agent->pin === (string)$pin) {
-=======
-            // Check PIN
-            if ($agent->pin === $pin) {
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
                 Log::info('PIN validated successfully', [
                     'agent_id' => $agent->id,
                     'business_name' => $agent->business_name
@@ -1356,670 +1879,342 @@ class UssdSessionController extends Controller
         }
     }
 
-    private function getAgentFloatBalance($phone)
+    private function logAgentActivity($agent_id, $activity_type, $status)
     {
-        $agent = Agent::where('phone_number', $phone)->first();
-        return $agent ? $agent->float_balance : 0;
+        if ($agent_id) {
+            AgentActivityLog::create([
+                'agent_id' => $agent_id,
+                'activity_type' => $activity_type,
+                'session_id' => request()->SESSION_ID,
+                'phone_number' => request()->MSISDN,
+                'status' => $status,
+                'ip_address' => request()->ip()
+            ]);
+        }
     }
 
-<<<<<<< HEAD
-    function payment($phone, $amount, $meter_no, $customer_id)
-    {
-        if (str_starts_with($phone, '75') || str_starts_with($phone, '95') || str_starts_with($phone, '095') || str_starts_with($phone, '26095') || str_starts_with($phone, '075') || str_starts_with($phone, '26075')) {
-
-            //generate the random reference number
-            $payment_ref = $this->generateConversationId();
-
-            $phone_number = $phone;
-
-            if (str_starts_with($phone, '075')) {
-                $phone_number = ltrim($phone_number, '0');
-            }
-            if (str_starts_with($phone, '26075')) {
-                $phone_number = ltrim($phone_number, '260');
-            }
-            if (str_starts_with($phone, '26095')) {
-                $phone_number = ltrim($phone_number, '260');
-            }
-            if (str_starts_with($phone, '095')) {
-                $phone_number = ltrim($phone_number, '0');
-            }
-
-            //save payment intent into the database
-            $initialised_transaction = Payment::create([
-                'payment_method_id' => 2, // 1.Cash 2. mobile money
-                'payment_channel_id' => 3, //1. Airtel 2. MTN 3. Zamtel
-                'payment_reference_number' => $payment_ref,
-                'payment_route_id' => 2,
-                'phone_number' => $phone,
-                'meter_number' => $meter_no,
-                'amount_paid' => $amount,
-                'payment_status_id' => 2, //1. success 2. pending 3. failed
-                'transaction_type_id' => 1, //1.credit and 2. Debit
-                'customer_id' => $customer_id
-            ]);
-
-            $initialised_transaction->save();
-
-            //Zamtel Money
-            //send payment to zamtel money
-
-            return $this->zamtel_soap("260" . $phone_number, $amount, $initialised_transaction->id, $payment_ref);
-=======
-    // function payment($phone, $amount, $meter_no, $customer_id)
-    // {
-    //     if (str_starts_with($phone, '75') || str_starts_with($phone, '95') || str_starts_with($phone, '095') || str_starts_with($phone, '26095') || str_starts_with($phone, '075') || str_starts_with($phone, '26075')) {
-
-    //         //generate the random reference number
-    //         $payment_ref = $this->generateConversationId();
-
-    //         $phone_number = $phone;
-
-    //         if (str_starts_with($phone, '075')) {
-    //             $phone_number = ltrim($phone_number, '0');
-    //         }
-    //         if (str_starts_with($phone, '26075')) {
-    //             $phone_number = ltrim($phone_number, '260');
-    //         }
-    //         if (str_starts_with($phone, '26095')) {
-    //             $phone_number = ltrim($phone_number, '260');
-    //         }
-    //         if (str_starts_with($phone, '095')) {
-    //             $phone_number = ltrim($phone_number, '0');
-    //         }
-
-    //         //save payment intent into the database
-    //         $initialised_transaction = Payment::create([
-    //             'payment_method_id' => 2, // 1.Cash 2. mobile money
-    //             'payment_channel_id' => 3, //1. Airtel 2. MTN 3. Zamtel
-    //             'payment_reference_number' => $payment_ref,
-    //             'payment_route_id' => 2,
-    //             'phone_number' => $phone,
-    //             'meter_number' => $meter_no,
-    //             'amount_paid' => $amount,
-    //             'payment_status_id' => 2, //1. success 2. pending 3. failed
-    //             'transaction_type_id' => 1, //1.credit and 2. Debit
-    //             'customer_id' => $customer_id
-    //         ]);
-
-    //         $initialised_transaction->save();
-
-    //         //Zamtel Money
-    //         //send payment to zamtel money
-
-    //         return $this->zamtel_soap("260" . $phone_number, $amount, $initialised_transaction->id, $payment_ref);
-    //     }
-    // }
-
-    function payment($phone, $amount, $meter_no, $customer_id)
+    // Update the sendNotification method with logging:
+    private function sendNotification($phone, $message)
     {
         try {
-            Log::info('Starting payment process', [
+            Log::info('Sending SMS Notification', [
                 'phone' => $phone,
-                'amount' => $amount,
-                'meter_no' => $meter_no,
-                'customer_id' => $customer_id
+                'message' => $message
             ]);
 
-            // Check if it's a Zamtel number
-            if (str_starts_with($phone, '75') ||
-                str_starts_with($phone, '95') ||
-                str_starts_with($phone, '095') ||
-                str_starts_with($phone, '26095') ||
-                str_starts_with($phone, '075') ||
-                str_starts_with($phone, '26075')) {
+            $url_encoded_message = urlencode($message);
+            $url = 'https://www.cloudservicezm.com/smsservice/httpapi?' .
+                'username=Blessmore&password=Blessmore&msg=' . $url_encoded_message .
+                '.+&shortcode=2343&sender_id=REAPAY&phone=' . $phone .
+                '&api_key=121231313213123123';
 
-                // Generate reference number
-                $payment_ref = $this->generateConversationId();
-
-                // Format phone number for Zamtel
-                $phone_number = $phone;
-                if (str_starts_with($phone, '075')) {
-                    $phone_number = ltrim($phone_number, '0');
-                }
-                if (str_starts_with($phone, '26075')) {
-                    $phone_number = ltrim($phone_number, '260');
-                }
-                if (str_starts_with($phone, '26095')) {
-                    $phone_number = ltrim($phone_number, '260');
-                }
-                if (str_starts_with($phone, '095')) {
-                    $phone_number = ltrim($phone_number, '0');
-                }
-
-                // Create initial payment record
-                $initialised_transaction = Payment::create([
-                    'payment_method_id' => 2, // mobile money
-                    'payment_channel_id' => 3, // Zamtel
-                    'payment_reference_number' => $payment_ref,
-                    'payment_route_id' => 2,
-                    'phone_number' => $phone,
-                    'meter_number' => $meter_no,
-                    'amount_paid' => $amount,
-                    'payment_status_id' => 2, // pending
-                    'transaction_type_id' => 1, // credit
-                    'customer_id' => $customer_id,
-                    'retry_count' => 1
-                ]);
-
-                // Call Zamtel SOAP
-                return $this->zamtel_soap(
-                    "260" . $phone_number,
-                    $amount,
-                    $initialised_transaction->id,
-                    $payment_ref
-                );
-            }
-
-            return false;
-        } catch (\Exception $e) {
-            Log::error('Payment initiation error', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+            Log::info('SMS API Request', [
+                'url' => $url
             ]);
-            return false;
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-        }
-    }
-
-    function zamtel_soap($phone, $amount, $transaction_id, $transaction_ref)
-    {
-<<<<<<< HEAD
-
-        $current_date = Carbon::now();
-        $timestamp = $current_date->format('YmdHis');
-        $password = "YEGxyU69L8lHXjHUJe1SNk3MwOMTxQG9";
-        $CllT_Caller = "CllT_Caller";
-        $identifier = "111135";
-        $test_url = "http://172.18.2.135:7661/payment/services/SYNCAPIRequestMgrService";
-        $prod_url = "http://172.18.0.133:7661/payment/services/SYNCAPIRequestMgrService/";
-
-        Log::info("Zamtel Web Started - PHONE NUMBER: " . $phone . "; AMOUNT: " . $amount.", TIMESTAMP ".$timestamp);
-
-        $newXmlPayload = '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-        xmlns:api="http://cps.huawei.com/synccpsinterface/api_requestmgr"
-        xmlns:req="http://cps.huawei.com/synccpsinterface/request"
-        xmlns:com="http://cps.huawei.com/synccpsinterface/common"
-        xmlns:cus="http://cps.huawei.com/cpsinterface/customizedrequest">
-            <soapenv:Body>
-                <api:Request>
-                    <!-- Request Header -->
-                    <req:Header>
-                        <req:Version>1.0</req:Version>
-                        <req:CommandID>InitTrans_Customer Pay Organization Bill</req:CommandID>
-                        <req:OriginatorConversationID>429106433679961234</req:OriginatorConversationID>
-                        <req:Caller>
-                            <req:CallerType>2</req:CallerType>
-                            <req:ThirdPartyID>REA_Caller</req:ThirdPartyID>
-                            <req:Password>YEGxyU69L8lHXjHUJe1SNk3MwOMTxQG9</req:Password>
-                        </req:Caller>
-                        <req:KeyOwner>1</req:KeyOwner>
-                        <req:Timestamp>20190611103527</req:Timestamp>
-                    </req:Header>
-                    <!-- Request Body -->
-                    <req:Body>
-                        <req:Identity>
-                            <req:Initiator>
-                                <req:IdentifierType>1</req:IdentifierType>
-                                <req:Identifier>'.$phone.'</req:Identifier>
-                            </req:Initiator>
-                            <req:ReceiverParty>
-                                <req:IdentifierType>4</req:IdentifierType>
-                                <req:Identifier>111135</req:Identifier>
-                            </req:ReceiverParty>
-                        </req:Identity>
-                        <req:TransactionRequest>
-                            <req:Parameters>
-                                <req:Parameter>
-                                    <com:Key>BillReferenceNumber</com:Key>
-                                    <com:Value>'.$transaction_ref.'</com:Value>
-                                </req:Parameter>
-                                <req:Amount>'.$amount.'</req:Amount>
-                                <req:Currency>ZMW</req:Currency>
-                            </req:Parameters>
-                        </req:TransactionRequest>
-                    </req:Body>
-                </api:Request>
-            </soapenv:Body>
-        </soapenv:Envelope>';
-
-        $curl = curl_init();
-
-        curl_setopt_array($curl, array(
-            CURLOPT_URL => $prod_url,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING => '',
-            CURLOPT_MAXREDIRS => 10,
-            CURLOPT_TIMEOUT => 0,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-            CURLOPT_CUSTOMREQUEST => 'POST',
-            CURLOPT_POSTFIELDS => $newXmlPayload,
-            CURLOPT_HTTPHEADER => array(
-                'Accept: application/soap+xml,application/dime,multipart/related,text/*',
-                'Content-Type: text/xml',
-                'SOAPAction: ""'
-            ),
-        ));
-
-        $response = curl_exec($curl);
-
-        curl_close($curl);
-
-        Log::info("PHONE NUMBER " . $phone . " Zamtel Curl", ["Result" => $response]);
-
-        $xml = simplexml_load_string($response, 'SimpleXMLElement', LIBXML_NOCDATA);
-
-        // Register SOAP namespace prefix
-        $xml->registerXPathNamespace('res', 'http://cps.huawei.com/synccpsinterface/result');
-
-        // Use the registered namespace prefix in XPath query
-        $resultCode = (string)$xml->xpath('//res:ResultCode')[0];
-        $resultDesc = (string)$xml->xpath('//res:ResultDesc')[0];
-
-        Log::info("PHONE NUMBER " . $phone . " Zamtel SOAP", ["Result Code" => $resultCode]);
-
-        // Check if the response has the expected structure
-
-        if ($resultCode == 0 && $resultCode == "0") {
-
-            $payment = Payment::where('id', $transaction_id)->first();
-
-            $this->createTransactionSparkApi($payment->id, $payment->customer_id, $payment->amount_paid, $transaction_ref, $payment->phone_number);
-
-            Log::info("Zamtel SOAP Success Code ".$resultCode);
-            Log::info("Zamtel SOAP Success Description".$resultDesc);
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 1 //success
-            ]);
-
-        } elseif ($resultCode == "E8003") {
-            //ResultCode: E8027
-            //ResultDesc: System is unable to process your request now, please try later
-            //Scenario: Occurs when there is a mismatch with credentials I.e password and thirdPartyID fields.
-
-            Log::info("Zamtel SOAP Error Code ".$resultCode);
-            Log::info("Zamtel SOAP Error Description ".$resultDesc);
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
-            ]);
-
-        }  elseif ($resultCode == "E8027") {
-            //ResultCode: E8027
-            //ResultDesc: System is unable to process your request now, please try later
-            //Scenario: Occurs when there is a mismatch with credentials I.e password and thirdPartyID fields.
-
-            Log::info("Zamtel SOAP Error Code ".$resultCode);
-            Log::info("Zamtel SOAP Error Description ".$resultDesc);
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
-            ]);
-
-        } elseif ($resultCode == "2001") {
-            //ResultCode: 2001
-            //ResultDesc: Initiator authentication error.
-            //Scenario: Occurs when there is a mismatch with Initiator credentials i.e Identifier and SecurityCredential fields.
-
-            Log::info("Zamtel SOAP Error Code ".$resultCode);
-            Log::info("Zamtel SOAP Error Description ".$resultDesc);
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
-            ]);
-
-        } elseif ($resultCode == "2006") {
-            //ResultCode: 2001
-            //ResultDesc: Initiator authentication error.
-            //Scenario: Occurs when there is a mismatch with Initiator credentials i.e Identifier and SecurityCredential fields.
-
-            Log::info("Zamtel SOAP Error Code ".$resultCode);
-            Log::info("Zamtel SOAP Error Description Insufficient Balance");
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
-            ]);
-
-        }elseif ($resultCode == "-1" && $resultCode == -1) {
-            //ResultCode: -1
-            //ResultDesc: System internal error.
-            //Scenario: Occurs when there is a connection timeout.
-
-            Log::info("Zamtel SOAP Error Code ".$resultCode);
-            Log::info("Zamtel SOAP Error Description ".$resultDesc);
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
-            ]);
-
-        }else {
-            //failed
-            Log::info("Zamtel SOAP", ["Failed Response" => $resultCode]);
-
-            $update_record = Payment::where('id', $transaction_id)->update([
-                'payment_status_id' => 3, //failed
-                'error_message' => $resultDesc
-            ]);
-        }
-
-        return true;
-
-
-    }
-
-=======
-        try {
-            $current_date = Carbon::now();
-            $timestamp = $current_date->format('YmdHis');
-
-            Log::info("Zamtel SOAP Request", [
-                'phone' => $phone,
-                'amount' => $amount,
-                'ref' => $transaction_ref
-            ]);
-
-            // For testing, simulate successful Zamtel response
-            $payment = Payment::find($transaction_id);
-            if ($payment) {
-                // Update payment status
-                $payment->update([
-                    'payment_status_id' => 1 // success
-                ]);
-
-                // Call SparkMeter API with correct endpoint
-                $sparkResult = $this->processSparkMeterPayment(
-                    $payment->customer_id,
-                    $amount,
-                    $transaction_ref,
-                    $payment->customer_number
-                );
-
-                if ($sparkResult['success']) {
-                    // Send success message
-                    $this->sendNotification(
-                        $payment->phone_number,
-                        "Dear Customer,\n\n" .
-                        "Your electricity purchase was successful!\n" .
-                        "Amount: K" . number_format($amount, 2) . "\n" .
-                        "Reference: " . $transaction_ref . "\n" .
-                        "Date: " . now()->format('d-m-Y H:i') . "\n" .
-                        "Thank you for choosing REA."
-                    );
-
-                    return true;
-                } else {
-                    // Update payment record with error
-                    $payment->update([
-                        'payment_status_id' => 3,
-                        'error_message' => $sparkResult['message']
-                    ]);
-
-                    return false;
-                }
-            }
-
-            return false;
-
-        } catch (\Exception $e) {
-            Log::error("Payment processing error", [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-            return false;
-        }
-    }
-
-    private function processSparkMeterPayment($customerId, $amount, $externalId, $customerCode)
-    {
-        try {
-            Log::info("SparkMeter Payment Request", [
-                'amount' => $amount,
-                'external_id' => $externalId,
-                'customer_code' => 'Ntambu-22250'
-            ]);
-
-            $curl = curl_init();
-
-            $requestBody = json_encode([
-                'amount' => (string)$amount,
-                'memo' => 'USSD Payment',
-                'external_id' => (string)$externalId,
-                'customer_code' => 'Ntambu-22250'
-            ]);
-
-            Log::info("SparkMeter Request Body", [
-                'body' => $requestBody
-            ]);
-
-            curl_setopt_array($curl, array(
-                CURLOPT_URL => 'https://www.sparkmeter.cloud/api/v1/payments',
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_ENCODING => '',
-                CURLOPT_MAXREDIRS => 10,
-                CURLOPT_TIMEOUT => 0,
-                CURLOPT_FOLLOWLOCATION => true,
-                CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-                CURLOPT_CUSTOMREQUEST => 'POST',
-                CURLOPT_POSTFIELDS => $requestBody,
-                CURLOPT_HTTPHEADER => array(
-                    'Accept: application/json',
-                    'Content-Type: application/json',
-                    'X-API-KEY: LKCIkIPzsiALD3BNGhJf9LaAIRNuv_xJPfTpnL1tJls',
-                    'X-API-SECRET: qDCEAqmoLg5vtPNNLoszByHBecCT$0m)'
-                ),
-            ));
-
-            $response = curl_exec($curl);
-            $http_status_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
-
-            if (curl_errno($curl)) {
-                Log::error("SparkMeter CURL Error", [
-                    'error' => curl_error($curl)
-                ]);
-            }
-
-            curl_close($curl);
-
-            Log::info("SparkMeter Payment Response", [
-                'status_code' => $http_status_code,
-                'response' => $response
-            ]);
-
-            $decoded_response = json_decode($response, true);
-
-            if ($http_status_code == 201 || $http_status_code == 200) {
-                if (isset($decoded_response['errors']) && !empty($decoded_response['errors'])) {
-                    Log::error("SparkMeter Payment Error", [
-                        'errors' => $decoded_response['errors']
-                    ]);
-
-                    return [
-                        'success' => false,
-                        'message' => $decoded_response['errors'][0]['details'] ?? 'Payment failed'
-                    ];
-                }
-
-                Log::info("SparkMeter Payment Success", [
-                    'response' => $decoded_response
-                ]);
-
-                return [
-                    'success' => true,
-                    'token' => $decoded_response['data']['id'] ?? null,
-                    'amount' => $decoded_response['data']['amount']['value'] ?? $amount,
-                    'status' => $decoded_response['data']['status'] ?? 'completed'
-                ];
-            } else {
-                $error_message = isset($decoded_response['errors']) ?
-                            $decoded_response['errors'][0]['details'] :
-                            'Unknown error';
-
-                Log::error("SparkMeter Payment Failed", [
-                    'status_code' => $http_status_code,
-                    'error' => $error_message,
-                    'response' => $decoded_response
-                ]);
-
-                return [
-                    'success' => false,
-                    'message' => $error_message
-                ];
-            }
-
-        } catch (\Exception $e) {
-            Log::error("SparkMeter Payment Exception", [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-
-            return [
-                'success' => false,
-                'message' => 'Service error'
-            ];
-        }
-    }
-
-
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-    function createTransactionSparkApi($payment_id, $customer_id, $amount, $ref_number, $phone_number): void
-    {
-
-        Log::info("Spark APP payment id=" . $payment_id . ", customer_id=" . $customer_id . ", amount=" . $amount . ", ref number=" . $ref_number . ", phone number=" . $phone_number);
-
-        $curl = curl_init();
-
-        curl_setopt_array($curl, array(
-           // CURLOPT_URL => 'http://sparkapp-staging.spk.io:5010/api/v0/transaction/',
-            CURLOPT_URL => 'https://https://rea-location001.sparkmeter.cloud/api/v0/transaction/',
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING => '',
-            CURLOPT_MAXREDIRS => 10,
-            CURLOPT_TIMEOUT => 0,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-            CURLOPT_CUSTOMREQUEST => 'POST',
-            CURLOPT_POSTFIELDS => 'customer_id=' . $customer_id . '&amount=' . $amount . '&source=cash&external_id=' . $ref_number,
-            CURLOPT_HTTPHEADER => array(
-                'Content-Type: application/x-www-form-urlencoded',
-                'Authentication-Token: .eJwFwckRgDAIAMBeeMsMIHLU4viAJPRfgrsvlHQRRWFzCGqyY8hTOKaTc6_ZdOCCMPG1-zQnL1LSOpR29LFeKu7w_eZqE5s.ZX__SA.Ob37E1u4ZWoyQPbOajB0i5rTv_M'
-                //'Authentication-Token: .eJwNw8kNwDAIBMBeeAfJxuuAa4nyWB_0X0Iy0jxii57HXaNUKhpTIziVYSP-nRVyCQpGrhGZu9vE7c3sAKxn9YIJeT_fFxNO.ZU-0fg.9FQ_6C4Tcv9ue2Tmda_8l3zvqnA'
-            ),
-        ));
-
-        $response = curl_exec($curl);
-        // Get the HTTP status code
-        $http_status_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
-
-
-        curl_close($curl);
-        Log::info("Spark APP", ["Status" => json_encode($http_status_code)]);
-        Log::info("Spark App", ["Response" => json_encode($response)]);
-        if ($http_status_code == 201) {
-            // Decode the JSON response
-            $decoded_response = json_decode($response, true);
-
-            // Access 'status' and 'transaction_id'
-            $status = $decoded_response['status'];
-            $transaction_id = $decoded_response['transaction_id'];
-
-            //Update the payment record
-            $update_payment = Payment::where('id', $payment_id)->update([
-                'payment_status_id' => 1,
-                'spark_transaction_id' => $transaction_id
-            ]);
-
-            //send message to the client
-            $message_string = "You have successfully topped up your electricity for K".$amount.". Transaction number " . $transaction_id;
-<<<<<<< HEAD
-            $this->sendMessage($message_string, $phone_number);
-=======
-            $this->sendNotification($phone, $message_string);
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
-
-        } else {
-            // Decode the JSON response
-            $decoded_response = json_decode($response, true);
-
-            // Access 'status' and 'transaction_id'
-            $status = $decoded_response['status'];
-            $error_message = $decoded_response['error'];
-
-            //Update the payment record
-            $update_payment = Payment::where('id', $payment_id)->update([
-                'payment_status_id' => 2,
-                'error_message' => $error_message
-            ]);
-        }
-
-    }
-
-    function sendMessage($message_string, $phone_number): void
-    {
-        //Next auto response
-        $url_encoded_message = urlencode($message_string);
-
-        //Next auto response
-        $sendSenderSMS = Http::withoutVerifying()
-            ->post('https://www.cloudservicezm.com/smsservice/httpapi?username=Blessmore&password=Blessmore&msg=' . $url_encoded_message . '.+&shortcode=2343&sender_id=REA&phone=' . $phone_number . '&api_key=121231313213123123');
-
-        //return $sendSenderSMS->body();
-    }
-
-    //send sms notification
-    function sendNotification($phone, $message_string): void
-    {
-<<<<<<< HEAD
-        $url_encoded_message = urlencode($message_string);
-
-        $url = 'https://www.cloudservicezm.com/smsservice/httpapi?username=Blessmore&password=Blessmore&msg=' . $url_encoded_message . '.+&shortcode=2343&sender_id=REAPAY&phone=' . $phone . '&api_key=121231313213123123';
-
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Use this only if you have SSL verification issues
-        $response = curl_exec($ch);
-        curl_close($ch);
-=======
-        try {
-            $url_encoded_message = urlencode($message_string);
-            $url = 'https://www.cloudservicezm.com/smsservice/httpapi?username=Blessmore&password=Blessmore&msg=' .
-                   $url_encoded_message . '.+&shortcode=2343&sender_id=REA&phone=' . $phone . '&api_key=121231313213123123';
 
             $ch = curl_init($url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
             $response = curl_exec($ch);
-            curl_close($ch);
+            $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
-            Log::info('SMS sent', [
-                'phone' => $phone,
-                'message' => $message_string
-            ]);
-        } catch (\Exception $e) {
-            Log::error('SMS sending failed', [
-                'error' => $e->getMessage(),
+            Log::info('SMS API Response', [
+                'http_code' => $http_code,
+                'response' => $response,
                 'phone' => $phone
             ]);
+
+            if ($http_code != 200) {
+                throw new \Exception('SMS API returned non-200 status code: ' . $http_code);
+            }
+
+            curl_close($ch);
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('SMS Sending Failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'phone' => $phone
+            ]);
+            return false;
         }
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
     }
 
 
-    function uuidv4()
+    private function sendSms($phone, $message)
     {
-        return sprintf('%05d-%05d-%05d-%05d',
-            mt_rand(0, 9999),
-            mt_rand(0, 9999),
-            mt_rand(0, 9999),
-            mt_rand(0, 9999)
-        );
+        // Implement SMS sending logic
+        Log::info('SMS Notification', ['phone' => $phone, 'message' => $message]);
+        return true;
+    }
+
+    private function getCustomerDeskMenu($language)
+    {
+        if ($language == 1) { //English
+            return "Please select one of the options\n\n" .
+                "1. Complaints\n" .
+                "2. General Inquiries\n" .
+                "3. Customer Feedback\n" .
+                "4. Track Complaints" .
+                "\n\n0. Back\n*. Main Menu";
+        } else { //Lunda
+            return "Sakulenuhu chuma chimu heshina\n\n" .
+                "1. Nyabu (Kudibilashana)\n" .
+                "2. Malwihu adi ezhima (Kwihula Mudimwezhima)\n" .
+                "3. Wunsahu kudi akakulanda kesi ka wuneñu (Kwakula Kwa Mukakuseshana)\n" .
+                "4. Mwatalishenu nyabu" .
+                "\n\n0. Back\n*. Main Menu";
+        }
+    }
+
+    private function getComplaintsMessage($language, $type)
+    {
+        $messages = [
+            1 => [ // English
+                'METER_PROMPT' => "Please enter your Meter number\n0. Back\n*. Main Menu",
+                'TYPE_SELECTION' => "Please select the type of Complaint\n\n1. Power outage\n2. Billing\n3. Other\n\n0. Back\n*. Main Menu",
+                'SPECIFY' => "Please specify the complaint\n0. Back\n*. Main Menu",
+                'SUCCESS' => "Thank you for your report. Our team will look into the problem and update you."
+            ],
+            2 => [ // Lunda
+                'METER_PROMPT' => "Mwani Iñizhenu nambala yenu ya mita\n0. Back\n*. Main Menu",
+                'TYPE_SELECTION' => "Mwani sakulenu muchidi wamwabu\n\n1. Kuya kwa kesi ka wuneñu hela malayiti\n2. Wuseya wa kesi ka wunengu hela malayiti\n3. Nyabu yikwawu\n\n0. Back\n*. Main Menu",
+                'SPECIFY' => "Mwani shimunenu mwabu wenu\n0. Back\n*. Main Menu",
+                'SUCCESS' => "Kusakililaku mwani hakushimuna, antu etu akutalahu ha kukala kweniku naku yilezha mwakwilila mwani"
+            ]
+        ];
+
+        return $messages[$language][$type] ?? $messages[1]['METER_PROMPT'];
+    }
+
+    private function getGeneralInquiriesMenu($language)
+    {
+        if ($language == 1) {
+            return "1. How to access power?\n" .
+                "2. How to buy units?\n" .
+                "3. How to change the tariff plan?\n" .
+                "4. Other specify" .
+                "\n\n0. Back\n*. Main Menu";
+        } else {
+            return "1. Munamutachikijila kutwala kesi ka wuneñu?\n" .
+                "2. Munamutachikijila kula yuniti?\n" .
+                "3. Munamutachikijila kuchinja tariff plan?\n" .
+                "4. Yuma yikwawu" .
+                "\n\n0. Back\n*. Main Menu";
+        }
+    }
+
+    private function getFeedbackMessage($language, $type)
+    {
+        if ($language == 1) {
+            return "Please enter your feedback\n0. Back\n*. Main Menu";
+        } else {
+            return "Wunsahu kudi akakulanda kesi ka wunengu\n0. Back\n*. Main Menu";
+        }
+    }
+
+    private function getTrackComplaintMessage($language, $type)
+    {
+        if ($language == 1) {
+            return "Please enter your Complaint number\n0. Back\n*. Main Menu";
+        } else {
+            return "Mwani Iñizhenu nambala yenu ya nyabu\n0. Back\n*. Main Menu";
+        }
+    }
+
+    // private function getCustomerDeskMenu($language)
+    // {
+    //     if ($language == 1) { //English
+    //         return "Please select one of the options\n\n" .
+    //             "1. Complaints\n" .
+    //             "2. General Inquiries\n" .
+    //             "3. Customer Feedback\n" .
+    //             "4. Track Complaints" .
+    //             "\n\n0. Back\n*. Main Menu";
+    //     } else { //Lunda
+    //         return "Sakulenuhu chuma chimu heshina\n\n" .
+    //             "1. Nyabu (Kudibilashana)\n" .
+    //             "2. Malwihu adi ezhima (Kwihula Mudimwezhima)\n" .
+    //             "3. Wunsahu kudi akakulanda kesi ka wuneñu (Kwakula Kwa Mukakuseshana)\n" .
+    //             "4. Mwatalishenu nyabu" .
+    //             "\n\n0. Back\n*. Main Menu";
+    //     }
+    // }
+
+    // private function getComplaintsMessage($language, $type)
+    // {
+    //     $messages = [
+    //         1 => [ // English
+    //             'METER_PROMPT' => "Please enter your Meter number\n0. Back\n*. Main Menu",
+    //             'TYPE_SELECTION' => "Please select the type of Complaint\n\n1. Power outage\n2. Billing\n3. Other\n\n0. Back\n*. Main Menu",
+    //             'SPECIFY' => "Please specify the complaint\n0. Back\n*. Main Menu",
+    //             'SUCCESS' => "Thank you for your report. Our team will look into the problem and update you.",
+    //             'ERROR' => "System error. Please try again later.\n0. Back\n*. Main Menu"
+    //         ],
+    //         2 => [ // Lunda
+    //             'METER_PROMPT' => "Mwani Iñizhenu nambala yenu ya mita\n0. Back\n*. Main Menu",
+    //             'TYPE_SELECTION' => "Mwani sakulenu muchidi wamwabu\n\n1. Kuya kwa kesi ka wuneñu hela malayiti\n2. Wuseya wa kesi ka wunengu hela malayiti\n3. Nyabu yikwawu\n\n0. Back\n*. Main Menu",
+    //             'SPECIFY' => "Mwani shimunenu mwabu wenu\n0. Back\n*. Main Menu",
+    //             'SUCCESS' => "Kusakililaku mwani hakushimuna, antu etu akutalahu ha kukala kweniku naku yilezha mwakwilila mwani",
+    //             'ERROR' => "Kukala mukachi ka computer. Mwani temukenu.\n0. Back\n*. Main Menu"
+    //         ]
+    //     ];
+
+    //     return $messages[$language][$type] ?? $messages[1]['ERROR'];
+    // }
+
+    // private function getFeedbackMessage($language, $type)
+    // {
+    //     if ($language == 1) {
+    //         return "Please enter your feedback\n0. Back\n*. Main Menu";
+    //     } else {
+    //         return "Wunsahu kudi akakulanda kesi ka wunengu\n0. Back\n*. Main Menu";
+    //     }
+    // }
+
+    // private function getTrackComplaintMessage($language, $type)
+    // {
+    //     if ($language == 1) {
+    //         return "Please enter your Complaint number\n0. Back\n*. Main Menu";
+    //     } else {
+    //         return "Mwani Iñizhenu nambala yenu ya nyabu\n0. Back\n*. Main Menu";
+    //     }
+    // }
+
+    private function sendComplaintConfirmation($phone, $session_id, $language)
+    {
+        try {
+            Log::info('Preparing Complaint Confirmation', [
+                'session_id' => $session_id,
+                'phone' => $phone,
+                'language' => $language
+            ]);
+
+            $complaint = Complaint::where('session_id', $session_id)->first();
+
+            if (!$complaint) {
+                Log::error('Complaint Not Found', [
+                    'session_id' => $session_id
+                ]);
+                throw new \Exception('Complaint not found for session: ' . $session_id);
+            }
+
+            Log::info('Found Complaint Record', [
+                'complaint_number' => $complaint->complaint_number,
+                'session_id' => $session_id
+            ]);
+
+            $sms_message = ($language == 1) ?
+                "Thank you for your report. Your complaint NUMBER is " . $complaint->complaint_number .
+                ". Our team will look into the problem and update you. For any queries, please call us on 211-241296" :
+                "Kusakililaku hakushimuna. Nambala ya mwabu wenu yinayi " . $complaint->complaint_number .
+                ". Antu etu akutalahu ha kukala kweniku naku yilezha mwakwilila mwani. Munateli kutwitumina nshinga ha 211-241296";
+
+            return $this->sendNotification($phone, $sms_message);
+
+        } catch (\Exception $e) {
+            Log::error('Error Sending Complaint Confirmation', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'session_id' => $session_id,
+                'phone' => $phone
+            ]);
+            return false;
+        }
     }
 
 
+
+    // Updated getComplaintStatus method with detailed statuses
+    private function getComplaintStatus($status_id, $language)
+    {
+        $lang_code = $language == 1 ? 'en' : 'ln';
+        return self::COMPLAINT_STATUSES[$status_id][$lang_code] ??
+            ($language == 1 ? 'Unknown Status' : 'Kosi kutachikiza muchidi');
+    }
+
+    // Helper method to get complaint status history
+    private function getComplaintHistory($complaint_id, $language)
+    {
+        try {
+            $history = ComplaintStatusHistory::where('complaint_id', $complaint_id)
+                ->orderBy('created_at', 'desc')
+                ->limit(3)
+                ->get();
+
+            if ($history->isEmpty()) {
+                return ($language == 1) ?
+                    "No status history available." :
+                    "Kakweshi mahitilu a muchidi.";
+            }
+
+            $history_text = ($language == 1) ? "Recent Updates:\n" : "Mahitilu Amakesa:\n";
+
+            foreach ($history as $record) {
+                $status = $this->getComplaintStatus($record->status_id, $language);
+                $date = $record->created_at->format('d/m/Y H:i');
+
+                $history_text .= ($language == 1) ?
+                    "- $status on $date\n" :
+                    "- $status ha $date\n";
+            }
+
+            return $history_text;
+            } catch (\Exception $e) {
+            Log::error('Error fetching complaint history', [
+                'error' => $e->getMessage(),
+                'complaint_id' => $complaint_id
+            ]);
+
+            return ($language == 1) ?
+                "Error fetching status history." :
+                "Kukala hakutana mahitilu.";
+        }
+    }
+
+
+
+    // Update complaint confirmation method with logging:
+    // private function sendComplaintConfirmation($phone, $session_id, $language)
+    // {
+    //     try {
+    //         Log::info('Preparing Complaint Confirmation', [
+    //             'session_id' => $session_id,
+    //             'phone' => $phone,
+    //             'language' => $language
+    //         ]);
+
+    //         $complaint = Complaint::where('session_id', $session_id)->first();
+
+    //         if (!$complaint) {
+    //             Log::error('Complaint Not Found', [
+    //                 'session_id' => $session_id
+    //             ]);
+    //             throw new \Exception('Complaint not found for session: ' . $session_id);
+    //         }
+
+    //         Log::info('Found Complaint Record', [
+    //             'complaint_number' => $complaint->complaint_number,
+    //             'session_id' => $session_id
+    //         ]);
+
+    //         $sms_message = ($language == 1) ?
+    //             "Thank you for your report. Your complaint NUMBER is " . $complaint->complaint_number .
+    //             ". Our team will look into the problem and update you. For any queries, please call us on 211-241296" :
+    //             "Kusakililaku hakushimuna. Nambala ya mwabu wenu yinayi " . $complaint->complaint_number .
+    //             ". Antu etu akutalahu ha kukala kweniku naku yilezha mwakwilila mwani. Munateli kutwitumina nshinga ha 211-241296";
+
+    //         return $this->sendNotification($phone, $sms_message);
+
+    //         } catch (\Exception $e) {
+    //         Log::error('Error Sending Complaint Confirmation', [
+    //             'error' => $e->getMessage(),
+    //             'trace' => $e->getTraceAsString(),
+    //             'session_id' => $session_id,
+    //             'phone' => $phone
+    //         ]);
+    //         return false;
+    //     }
+    // }
 }

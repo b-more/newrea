@@ -19,12 +19,10 @@ class PaymentMethodSeeder extends Seeder
             ],
             [
                 "name" => "Mobile Money"
-<<<<<<< HEAD
-=======
             ],
             [
                 "name" => "Agent Float"
->>>>>>> 9228d80d1543cee5bd5c9aca0add5f49c53f436b
+
             ]
         ]);
     }

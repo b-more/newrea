@@ -23,6 +23,7 @@ return new class extends Migration
             $table->text('description')->nullable();
             $table->longText('comments')->nullable();
             $table->unsignedBigInteger('resolved_by')->nullable();
+            $table->string('status')->default('pending');
             $table->timestamps();
         });
     }

@@ -20,6 +20,7 @@ class Complaint extends Model
         'description',
         'comments',
         'resolved_by',
+        'status'
     ];
 
     public function communication_channel()

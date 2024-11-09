@@ -4,6 +4,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\TestController;
 use App\Http\Controllers\SparkController;
+use App\Http\Controllers\Ussd\DummyUssdController;
 
 /*
 |--------------------------------------------------------------------------
@@ -15,6 +16,8 @@ use App\Http\Controllers\SparkController;
 | be assigned to the "api" middleware group. Make something great!
 |
 */
+
+// In routes/api.php
 Route::post('/client_name', [App\Http\Controllers\TransactionController::class, 'check_customer']);
 Route::post('/pay', [App\Http\Controllers\TransactionController::class, 'make_payment']);
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
