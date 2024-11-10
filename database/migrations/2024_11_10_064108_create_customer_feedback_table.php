@@ -8,7 +8,7 @@ return new class extends Migration
 {
     public function up()
     {
-        Schema::create('customer_feedbacks', function (Blueprint $table) {
+        Schema::create('customer_feedback', function (Blueprint $table) {
             $table->id();
             $table->string('feedback_number');
             $table->string('phone_number');
